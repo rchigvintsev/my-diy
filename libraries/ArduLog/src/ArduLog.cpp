@@ -1,3 +1,8 @@
+/// \file ArduLog.cpp
+/// \brief Реализация простого логгера с уровнями для Arduino.
+///
+/// \author Roman Chigvintsev
+
 #include "ArduLog.h"
 
 ArduLogger::ArduLogger(const String& name, ArduLogLevel effectiveLevel) {
@@ -41,7 +46,8 @@ boolean ArduLogger::isOff(void) {
 
 void ArduLogger::log(const String& message, ArduLogLevel level) {
 	String resultMessage = "";
-	
+
+	// Разбиваем millis() на компоненты «часы:минуты:секунды.миллисекунды».
 	unsigned long ms = millis();
 
 	unsigned long hours = ms / ARDU_LOG_MILLIS_IN_HOUR;
@@ -52,7 +58,8 @@ void ArduLogger::log(const String& message, ArduLogLevel level) {
 
 	unsigned long seconds = ms / 1000;
 	ms -= seconds * 1000;
-	
+
+	// Форматируем временную метку с ведущими нулями.
 	if (hours < 10) {
 		resultMessage += "0";
 	}
@@ -72,7 +79,7 @@ void ArduLogger::log(const String& message, ArduLogLevel level) {
 		}
 	}
 	resultMessage += String(ms) + " ";
-	
+
 	switch (level) {
 		case ArduLogLevel::TRACE:
 			resultMessage += "TRACE ";
@@ -90,6 +97,6 @@ void ArduLogger::log(const String& message, ArduLogLevel level) {
 			resultMessage += "ERROR ";
 			break;
 	}
-	
+
 	Serial.println(resultMessage + _name + " - " + message);
 }
