@@ -9,12 +9,19 @@
 
 #define UNSIGNED_LONG_MAX_VALUE 4294967295UL
 
-#define MILLIS_IN_DAY 86400000
-#define MILLIS_IN_HOUR 3600000
+#define MILLIS_IN_DAY    86400000
+#define MILLIS_IN_HOUR   3600000
 #define MILLIS_IN_MINUTE 60000
+#define MILLIS_IN_SECOND 1000
 
-#define SECONDS_IN_DAY 86400
-#define SECONDS_IN_HOUR 3600
+#define SECONDS_IN_DAY    86400
+#define SECONDS_IN_HOUR   3600
+#define SECONDS_IN_MINUTE 60
+
+// Адреса параметров в EEPROM.
+#define EEPROM_ADDR_PUMP_TURN_ON_INTERVAL 0
+#define EEPROM_ADDR_PUMP_RUN_INTERVAL     4
+#define EEPROM_ADDR_CRC                   (EEPROM.length() - 4)
 
 #define DEFAULT_PUMP_TURN_ON_INTERVAL_MILLIS 259200000UL // 3 дня
 #define DEFAULT_PUMP_RUN_INTERVAL_MILLIS     30000UL
@@ -25,6 +32,9 @@
 
 #define LCD_BACKLIGHT_TIMEOUT_MILLIS 10000
 #define LCD_BLINK_INTERVAL_MILLIS      500
+
+// Параметры мигания времени при сбросе таймера полива удержанием левой кнопки
+#define WATERING_TIME_BLINK_HALF_PERIOD_MILLIS 250
 
 #define SETUP_STEP_PUMP_TURN_ON_INTERVAL_DAYS     0
 #define SETUP_STEP_PUMP_TURN_ON_INTERVAL_HOURS    1
@@ -118,7 +128,7 @@ void setup() {
   checkEeprom();
 
   unsigned long pumpTurnOnInterval;
-  EEPROM.get(0, pumpTurnOnInterval);
+  EEPROM.get(EEPROM_ADDR_PUMP_TURN_ON_INTERVAL, pumpTurnOnInterval);
   // Защита от мусора в EEPROM: интервал включения 1 минута .. 30 суток.
   if (pumpTurnOnInterval < MILLIS_IN_MINUTE || pumpTurnOnInterval > 30UL * MILLIS_IN_DAY) {
     pumpTurnOnInterval = DEFAULT_PUMP_TURN_ON_INTERVAL_MILLIS;
@@ -129,9 +139,9 @@ void setup() {
   pumpTurnOnTimer.setIntervalMillis(pumpTurnOnInterval);
 
   unsigned long pumpRunInterval;
-  EEPROM.get(4, pumpRunInterval);
+  EEPROM.get(EEPROM_ADDR_PUMP_RUN_INTERVAL, pumpRunInterval);
   // Защита от мусора в EEPROM: интервал работы помпы 1 секунда .. 1 час.
-  if (pumpRunInterval < 1000UL || pumpRunInterval > MILLIS_IN_HOUR) {
+  if (pumpRunInterval < MILLIS_IN_SECOND || pumpRunInterval > MILLIS_IN_HOUR) {
     pumpRunInterval = DEFAULT_PUMP_RUN_INTERVAL_MILLIS;
   }
   #ifdef DEBUG
@@ -227,7 +237,7 @@ void handleLeftButtonClick() {
         }
       } else if (setupStep == SETUP_STEP_PUMP_TURN_ON_INTERVAL_HOURS) {
         if (interval >= MILLIS_IN_HOUR) {
-          unsigned int hours = interval % MILLIS_IN_DAY / MILLIS_IN_HOUR;
+          unsigned long hours = interval % MILLIS_IN_DAY / MILLIS_IN_HOUR;
           if (hours > 0) {
             interval -= MILLIS_IN_HOUR;
           }
@@ -250,15 +260,15 @@ void handleLeftButtonClick() {
         if (interval >= MILLIS_IN_MINUTE) {
           interval -= MILLIS_IN_MINUTE;
         }
-      } else if (interval >= 1000) {
-        unsigned long seconds = interval % MILLIS_IN_MINUTE / 1000;
+      } else if (interval >= MILLIS_IN_SECOND) {
+        unsigned long seconds = interval % MILLIS_IN_MINUTE / MILLIS_IN_SECOND;
         if (seconds > 0) {
-          interval -= 1000;
+          interval -= MILLIS_IN_SECOND;
         }
       }
 
       if (interval == 0) {
-        interval = 1000;
+        interval = MILLIS_IN_SECOND;
       }
       pumpRunTimer.setIntervalMillis(interval);
     }
@@ -296,7 +306,7 @@ void handleRightButtonClick() {
         }
       } else if (setupStep == SETUP_STEP_PUMP_TURN_ON_INTERVAL_HOURS) {
         if (UNSIGNED_LONG_MAX_VALUE - interval >= MILLIS_IN_HOUR) {
-          unsigned int hours = interval % MILLIS_IN_DAY / MILLIS_IN_HOUR;
+          unsigned long hours = interval % MILLIS_IN_DAY / MILLIS_IN_HOUR;
           if (hours < 23) {
             interval += MILLIS_IN_HOUR;
           }
@@ -317,10 +327,10 @@ void handleRightButtonClick() {
             interval += MILLIS_IN_MINUTE;
           }
         }
-      } else if (UNSIGNED_LONG_MAX_VALUE - interval >= 1000) {
-        unsigned long seconds = interval % MILLIS_IN_MINUTE / 1000;
+      } else if (UNSIGNED_LONG_MAX_VALUE - interval >= MILLIS_IN_SECOND) {
+        unsigned long seconds = interval % MILLIS_IN_MINUTE / MILLIS_IN_SECOND;
         if (seconds < 59) {
-          interval += 1000;
+          interval += MILLIS_IN_SECOND;
         }
       }
       pumpRunTimer.setIntervalMillis(interval);
@@ -452,15 +462,26 @@ void displayTimeUntilNextWatering(unsigned long time, unsigned int blinkCount) {
   if (blinkCount == 0) {
     lcd.setCursor(0, 1);
     lcd.print(text);
-  } else {
-    for (int i = 0; i < blinkCount; i++) {
-      lcd.setCursor(0, 1);
-      lcd.print(text);
-      delay(250);
-      lcd.setCursor(0, 1);
-      lcd.print("                ");
-      delay(250);
-    }
+    return;
+  }
+
+  // Неблокирующее мигание: во время ожидания продолжаем обслуживать подсветку.
+  // Прерывание Timer1 продолжает обновлять состояния кнопок независимо.
+  for (unsigned int i = 0; i < blinkCount; i++) {
+    lcd.setCursor(0, 1);
+    lcd.print(text);
+    waitNonBlocking(WATERING_TIME_BLINK_HALF_PERIOD_MILLIS);
+    lcd.setCursor(0, 1);
+    lcd.print("                ");
+    waitNonBlocking(WATERING_TIME_BLINK_HALF_PERIOD_MILLIS);
+  }
+}
+
+// Неблокирующее ожидание с обслуживанием подсветки LCD и сбросом watchdog-событий
+void waitNonBlocking(unsigned long durationMillis) {
+  unsigned long start = millis();
+  while (millis() - start < durationMillis) {
+    updateLcdBacklight();
   }
 }
 
@@ -503,7 +524,7 @@ String timeIntervalToString(unsigned long timeIntervalMillis, byte includedTimeU
     lcdBlinkState = !lcdBlinkState;
   }
 
-  unsigned long seconds = round(timeIntervalMillis / 1000.0);
+  unsigned long seconds = round(timeIntervalMillis / (float) MILLIS_IN_SECOND);
 
   if (bitRead(includedTimeUnits, 0) == 1) {
     unsigned int days = seconds / SECONDS_IN_DAY;
@@ -538,8 +559,8 @@ String timeIntervalToString(unsigned long timeIntervalMillis, byte includedTimeU
   }
 
   if (bitRead(includedTimeUnits, 2) == 1) {
-    unsigned long minutes = seconds / 60;
-    seconds %= 60;
+    unsigned long minutes = seconds / SECONDS_IN_MINUTE;
+    seconds %= SECONDS_IN_MINUTE;
     if (bitRead(blinkingTimeUnits, 2) == 1 && !lcdBlinkState) {
       result += (minutes > 9 ? "  " : " ");
     } else {
@@ -582,37 +603,37 @@ void resetLcdBlinkTimer() {
 void checkEeprom() {
   unsigned long calculatedCrc = calculateEepromCrc();
   unsigned long storedCrc;
-  EEPROM.get(EEPROM.length() - 4, storedCrc);
+  EEPROM.get(EEPROM_ADDR_CRC, storedCrc);
   if (storedCrc != calculatedCrc) {
     #ifdef DEBUG
     logger.debug("Stored EEPROM CRC does not match calculated EEPROM CRC");
     #endif
     // Store default values and recalculate CRC
-    EEPROM.put(0, DEFAULT_PUMP_TURN_ON_INTERVAL_MILLIS);
-    EEPROM.put(4, DEFAULT_PUMP_RUN_INTERVAL_MILLIS);
+    EEPROM.put(EEPROM_ADDR_PUMP_TURN_ON_INTERVAL, DEFAULT_PUMP_TURN_ON_INTERVAL_MILLIS);
+    EEPROM.put(EEPROM_ADDR_PUMP_RUN_INTERVAL, DEFAULT_PUMP_RUN_INTERVAL_MILLIS);
     updateEepromCrc();
   }
 }
 
 void storePumpTurnOnInterval() {
-  EEPROM.put(0, pumpTurnOnTimer.getIntervalMillis());
+  EEPROM.put(EEPROM_ADDR_PUMP_TURN_ON_INTERVAL, pumpTurnOnTimer.getIntervalMillis());
   updateEepromCrc();
 }
 
 void storePumpTurnOffInterval() {
-  EEPROM.put(4, pumpRunTimer.getIntervalMillis());
+  EEPROM.put(EEPROM_ADDR_PUMP_RUN_INTERVAL, pumpRunTimer.getIntervalMillis());
   updateEepromCrc();
 }
 
 void updateEepromCrc() {
-  EEPROM.put(EEPROM.length() - 4, calculateEepromCrc());
+  EEPROM.put(EEPROM_ADDR_CRC, calculateEepromCrc());
 }
 
 unsigned long calculateEepromCrc() {
   // Стандартный CRC-32: начальное значение 0xFFFFFFFF, табличный расчёт по полубайтам,
   // финальная инверсия выполняется один раз после прохода по всем байтам.
   unsigned long crc = ~0L;
-  for (int i = 0; i < EEPROM.length() - 4; i++) {
+  for (int i = 0; i < EEPROM_ADDR_CRC; i++) {
     crc = CRC_TABLE[(crc ^ EEPROM[i]) & 0x0F] ^ (crc >> 4);
     crc = CRC_TABLE[(crc ^ (EEPROM[i] >> 4)) & 0x0F] ^ (crc >> 4);
   }

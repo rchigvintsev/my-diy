@@ -1,35 +1,35 @@
 #include "ArduLog.h"
 
-ArduLogger::ArduLogger(String name, ArduLogLevel effectiveLevel) {
+ArduLogger::ArduLogger(const String& name, ArduLogLevel effectiveLevel) {
 	_name = name;
 	_effectiveLevel = effectiveLevel;
 }
 
-void ArduLogger::trace(String message) {
+void ArduLogger::trace(const String& message) {
 	if (!isOff() && _effectiveLevel == ArduLogLevel::TRACE) {
 		log(message, ArduLogLevel::TRACE);
 	}
 }
 
-void ArduLogger::debug(String message) {
+void ArduLogger::debug(const String& message) {
 	if (!isOff() && (_effectiveLevel == ArduLogLevel::TRACE || _effectiveLevel == ArduLogLevel::DEBUG)) {
 		log(message, ArduLogLevel::DEBUG);
 	}
 }
 
-void ArduLogger::info(String message) {
+void ArduLogger::info(const String& message) {
 	if (!isOff() && (_effectiveLevel == ArduLogLevel::TRACE || _effectiveLevel == ArduLogLevel::DEBUG || _effectiveLevel == ArduLogLevel::INFO)) {
 		log(message, ArduLogLevel::INFO);
 	}
 }
 
-void ArduLogger::warn(String message) {
+void ArduLogger::warn(const String& message) {
 	if (!isOff() && (_effectiveLevel == ArduLogLevel::TRACE || _effectiveLevel == ArduLogLevel::DEBUG || _effectiveLevel == ArduLogLevel::INFO || _effectiveLevel == ArduLogLevel::WARN)) {
 		log(message, ArduLogLevel::WARN);
 	}
 }
 
-void ArduLogger::error(String message) {
+void ArduLogger::error(const String& message) {
 	if (!isOff()) {
 		log(message, ArduLogLevel::ERROR);
 	}
@@ -39,7 +39,7 @@ boolean ArduLogger::isOff(void) {
 	return _effectiveLevel == ArduLogLevel::OFF;
 }
 
-void ArduLogger::log(String message, ArduLogLevel level) {
+void ArduLogger::log(const String& message, ArduLogLevel level) {
 	String resultMessage = "";
 	
 	unsigned long ms = millis();

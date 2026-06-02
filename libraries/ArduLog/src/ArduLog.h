@@ -21,12 +21,12 @@ private:
 	ArduLogLevel _effectiveLevel;
 	
 	boolean isOff(void);
-	void log(String message, ArduLogLevel level);
+	void log(const String& message, ArduLogLevel level);
 public:
-	ArduLogger(String name, ArduLogLevel effectiveLevel = ArduLogLevel::DEBUG);
-	void trace(String message);
-	void debug(String message);
-	void info(String message);
-	void warn(String message);
-	void error(String message);
+	ArduLogger(const String& name, ArduLogLevel effectiveLevel = ArduLogLevel::DEBUG);
+	void trace(const String& message);
+	void debug(const String& message);
+	void info(const String& message);
+	void warn(const String& message);
+	void error(const String& message);
 };
