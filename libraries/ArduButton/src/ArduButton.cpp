@@ -2,6 +2,10 @@
 
 ArduButton::ArduButton(byte pin) {
 	_pin = pin;
+	_state = ARDU_BUTTON_STATE_RELEASED;
+	_debounceState = false;
+	_debounceTime = 0;
+	_clickCounter = 0;
 	_debounceTimeoutMillis = ARDU_BUTTON_DEFAULT_DEBOUNCE_TIMEOUT_MILLIS;
 	_holdTimeoutMillis = ARDU_BUTTON_DEFAULT_HOLD_TIMEOUT_MILLIS;
 }
@@ -10,7 +14,7 @@ void ArduButton::update(void) {
 	unsigned long now = millis();
 
 	boolean state = !digitalRead(_pin);
-	if (state && (_state != ARDU_BUTTON_STATE_PRESSED || _state != ARDU_BUTTON_STATE_HELD)) {
+	if (state && _state != ARDU_BUTTON_STATE_PRESSED && _state != ARDU_BUTTON_STATE_HELD) {
 		if (!_debounceState) {
 			_debounceState = true;
 			_debounceTime = now;

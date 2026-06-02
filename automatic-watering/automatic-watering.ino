@@ -16,8 +16,8 @@
 #define SECONDS_IN_DAY 86400
 #define SECONDS_IN_HOUR 3600
 
-#define PUMP_TURN_ON_INTERVAL_MILLIS 259200000UL // 3 дня
-#define PUMP_TURN_OFF_INTERVAL_MILLIS    30000UL
+#define DEFAULT_PUMP_TURN_ON_INTERVAL_MILLIS 259200000UL // 3 дня
+#define DEFAULT_PUMP_RUN_INTERVAL_MILLIS     30000UL
 
 #define WATERING_ANIMATION_LENGTH                  2
 #define WATERING_ANIMATION_FRAME_SIZE              8
@@ -69,11 +69,11 @@ const unsigned long CRC_TABLE[16] = {
   0x00000000, 0x1DB71064, 0x3B6E20C8, 0x26D930AC,
   0x76DC4190, 0x6B6B51F4, 0x4DB26158, 0x5005713C,
   0xEDB88320, 0xF00F9344, 0xD6D6A3E8, 0xCB61B38C,
-  0x9B64C2B0, 0x86D3D2D4, 0xA00AE278, 0xBDBDf21C
+  0x9B64C2B0, 0x86D3D2D4, 0xA00AE278, 0xBDBDF21C
 };
 
-ArduTimer pumpTurnOnTimer(PUMP_TURN_ON_INTERVAL_MILLIS);
-ArduTimer pumpTurnOffTimer(PUMP_TURN_OFF_INTERVAL_MILLIS);
+ArduTimer pumpTurnOnTimer(DEFAULT_PUMP_TURN_ON_INTERVAL_MILLIS);
+ArduTimer pumpRunTimer(DEFAULT_PUMP_RUN_INTERVAL_MILLIS);
 ArduTimer wateringAnimationTimer(WATERING_ANIMATION_FRAME_INTERVAL_MILLIS);
 ArduTimer lcdBacklightTimer(LCD_BACKLIGHT_TIMEOUT_MILLIS);
 ArduTimer lcdBlinkTimer(LCD_BLINK_INTERVAL_MILLIS);
@@ -119,17 +119,25 @@ void setup() {
 
   unsigned long pumpTurnOnInterval;
   EEPROM.get(0, pumpTurnOnInterval);
+  // Защита от мусора в EEPROM: интервал включения 1 минута .. 30 суток.
+  if (pumpTurnOnInterval < MILLIS_IN_MINUTE || pumpTurnOnInterval > 30UL * MILLIS_IN_DAY) {
+    pumpTurnOnInterval = DEFAULT_PUMP_TURN_ON_INTERVAL_MILLIS;
+  }
   #ifdef DEBUG
   logger.debug("Stored pump turn on interval (ms): " + String(pumpTurnOnInterval));
   #endif
   pumpTurnOnTimer.setIntervalMillis(pumpTurnOnInterval);
 
-  unsigned long pumpTurnOffInterval;
-  EEPROM.get(4, pumpTurnOffInterval);
+  unsigned long pumpRunInterval;
+  EEPROM.get(4, pumpRunInterval);
+  // Защита от мусора в EEPROM: интервал работы помпы 1 секунда .. 1 час.
+  if (pumpRunInterval < 1000UL || pumpRunInterval > MILLIS_IN_HOUR) {
+    pumpRunInterval = DEFAULT_PUMP_RUN_INTERVAL_MILLIS;
+  }
   #ifdef DEBUG
-  logger.debug("Stored pump turn off interval (ms): " + String(pumpTurnOffInterval));
+  logger.debug("Stored pump run interval (ms): " + String(pumpRunInterval));
   #endif
-  pumpTurnOffTimer.setIntervalMillis(pumpTurnOffInterval);
+  pumpRunTimer.setIntervalMillis(pumpRunInterval);
 }
 
 void loop() {
@@ -236,7 +244,7 @@ void handleLeftButtonClick() {
       }
       pumpTurnOnTimer.setIntervalMillis(interval);
     } else {
-      unsigned long interval = pumpTurnOffTimer.getIntervalMillis();
+      unsigned long interval = pumpRunTimer.getIntervalMillis();
 
       if (setupStep == SETUP_STEP_PUMP_TURN_OFF_INTERVAL_MINUTES) {
         if (interval >= MILLIS_IN_MINUTE) {
@@ -252,7 +260,7 @@ void handleLeftButtonClick() {
       if (interval == 0) {
         interval = 1000;
       }
-      pumpTurnOffTimer.setIntervalMillis(interval);
+      pumpRunTimer.setIntervalMillis(interval);
     }
   }
 }
@@ -301,7 +309,7 @@ void handleRightButtonClick() {
       }
       pumpTurnOnTimer.setIntervalMillis(interval);
     } else {
-      unsigned long interval = pumpTurnOffTimer.getIntervalMillis();
+      unsigned long interval = pumpRunTimer.getIntervalMillis();
       if (setupStep == SETUP_STEP_PUMP_TURN_OFF_INTERVAL_MINUTES) {
         if (UNSIGNED_LONG_MAX_VALUE - interval >= MILLIS_IN_MINUTE) {
           unsigned long minutes = interval % MILLIS_IN_HOUR / MILLIS_IN_MINUTE;
@@ -315,7 +323,7 @@ void handleRightButtonClick() {
           interval += 1000;
         }
       }
-      pumpTurnOffTimer.setIntervalMillis(interval);
+      pumpRunTimer.setIntervalMillis(interval);
     }
   }
 }
@@ -394,7 +402,7 @@ void updateSetupScreen() {
         blinkingTimeUnits = B1000;
       }
 
-      text = timeIntervalToString(pumpTurnOffTimer.getIntervalMillis(), B1100, blinkingTimeUnits);
+      text = timeIntervalToString(pumpRunTimer.getIntervalMillis(), B1100, blinkingTimeUnits);
     }
 
     lcd.print(text);
@@ -410,14 +418,14 @@ boolean isTimeToTurnOnPump() {
 }
 
 boolean isTimeToTurnOffPump() {
-  return pumpTurnOffTimer.isWentOff();
+  return pumpRunTimer.isWentOff();
 }
 
 void turnOnPump() {
   if (!pumpRunning) {
     digitalWrite(PUMP_PIN, HIGH);
     pumpRunning = true;
-    pumpTurnOffTimer.reset();
+    pumpRunTimer.reset();
     lcd.clear();
     #ifdef DEBUG
     logger.debug("Pump is turned on");
@@ -580,8 +588,8 @@ void checkEeprom() {
     logger.debug("Stored EEPROM CRC does not match calculated EEPROM CRC");
     #endif
     // Store default values and recalculate CRC
-    EEPROM.put(0, PUMP_TURN_ON_INTERVAL_MILLIS);
-    EEPROM.put(4, PUMP_TURN_OFF_INTERVAL_MILLIS);
+    EEPROM.put(0, DEFAULT_PUMP_TURN_ON_INTERVAL_MILLIS);
+    EEPROM.put(4, DEFAULT_PUMP_RUN_INTERVAL_MILLIS);
     updateEepromCrc();
   }
 }
@@ -592,7 +600,7 @@ void storePumpTurnOnInterval() {
 }
 
 void storePumpTurnOffInterval() {
-  EEPROM.put(4, pumpTurnOffTimer.getIntervalMillis());
+  EEPROM.put(4, pumpRunTimer.getIntervalMillis());
   updateEepromCrc();
 }
 
@@ -601,11 +609,12 @@ void updateEepromCrc() {
 }
 
 unsigned long calculateEepromCrc() {
+  // Стандартный CRC-32: начальное значение 0xFFFFFFFF, табличный расчёт по полубайтам,
+  // финальная инверсия выполняется один раз после прохода по всем байтам.
   unsigned long crc = ~0L;
   for (int i = 0; i < EEPROM.length() - 4; i++) {
     crc = CRC_TABLE[(crc ^ EEPROM[i]) & 0x0F] ^ (crc >> 4);
     crc = CRC_TABLE[(crc ^ (EEPROM[i] >> 4)) & 0x0F] ^ (crc >> 4);
-    crc = ~crc;
   }
-  return crc;
+  return ~crc;
 }
