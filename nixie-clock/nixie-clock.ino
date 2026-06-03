@@ -36,7 +36,15 @@ const byte TIMER2_PWM_PRESCALER_8 = 0b00000010;
 #define INDICATOR_SWITCH_THRESHOLD 25
 #define TIME_SYNC_TIMEOUT_MINUTES 15
 
+// Коррекция RTC по умолчанию отключена.
+// Положительное значение RTC_CORRECTION_SECONDS ускоряет отстающий модуль DS3231.
+#define RTC_CORRECTION_ENABLED false
+// Производим коррекцию раз в сутки
+#define RTC_CORRECTION_INTERVAL_MINUTES 1440UL
+#define RTC_CORRECTION_SECONDS 0L
+
 #define NIGHT_MODE_ENABLED   true
+
 #define NIGHT_STARTS_AT_HOUR   23
 #define NIGHT_ENDS_AT_HOUR      7
 
@@ -140,6 +148,7 @@ boolean changedFigures[INDICATOR_COUNT];
 boolean halfSecondPassed;
 boolean clockUpdateRequired;
 byte timeToSyncMinutes = TIME_SYNC_TIMEOUT_MINUTES;
+unsigned long timeToCorrectMinutes = RTC_CORRECTION_INTERVAL_MINUTES;
 
 boolean dotTurnedOn;
 boolean dotBrightnessRaising;
@@ -345,12 +354,7 @@ void updateTime() {
     minutes++;
     clockUpdateRequired = true;
 
-    if (timeToSyncMinutes > 0) {
-      timeToSyncMinutes--;
-    }
-    if (timeToSyncMinutes == 0) {
-      syncTime();
-    }
+    updatePeriodicRtcTasks();
 
     if (ANTI_POISONING_INTERVAL_MINUTES > 0 && minutes % ANTI_POISONING_INTERVAL_MINUTES == 0) {
       runAntiPoisoning();
@@ -800,7 +804,9 @@ void leaveSetupMode() {
   DateTime now = rtc.now();
   rtc.adjust(DateTime(now.year(), now.month(), now.day(), hours, minutes, 0));
 
+  resetRtcTimers();
   resetIndicators();
+
   showTime(hours, minutes);
   changeBrightness();
   clockState = CLOCK_STATE_NORMAL;
@@ -1052,13 +1058,81 @@ void showNextTime(byte hours, byte minutes) {
   nextFigures[3] = (byte) minutes % 10;
 }
 
+void updatePeriodicRtcTasks() {
+  if (updateRtcCorrection()) {
+    return;
+  }
+  updateTimeSync();
+}
+
+void updateTimeSync() {
+  if (timeToSyncMinutes > 0) {
+    timeToSyncMinutes--;
+  }
+  if (timeToSyncMinutes == 0) {
+    syncTime();
+  }
+}
+
+boolean updateRtcCorrection() {
+  if (!isRtcCorrectionEnabled()) {
+    return false;
+  }
+  if (timeToCorrectMinutes > 0) {
+    timeToCorrectMinutes--;
+  }
+  if (timeToCorrectMinutes > 0) {
+    return false;
+  }
+
+  applyRtcCorrection();
+  resetRtcCorrectionTimer();
+  syncTime();
+  return true;
+}
+
+boolean isRtcCorrectionEnabled() {
+  return RTC_CORRECTION_ENABLED && RTC_CORRECTION_INTERVAL_MINUTES > 0 && RTC_CORRECTION_SECONDS != 0;
+}
+
+void applyRtcCorrection() {
+  DateTime now = rtc.now();
+  rtc.adjust(shiftDateTime(now, RTC_CORRECTION_SECONDS));
+}
+
+DateTime shiftDateTime(DateTime dateTime, long secondsToAdd) {
+  uint32_t unixTime = dateTime.unixtime();
+  if (secondsToAdd > 0) {
+    return DateTime(unixTime + (uint32_t) secondsToAdd);
+  }
+  if (secondsToAdd < 0) {
+    uint32_t secondsToSubtract = (uint32_t) -secondsToAdd;
+    if (unixTime > secondsToSubtract) {
+      return DateTime(unixTime - secondsToSubtract);
+    }
+  }
+  return dateTime;
+}
+
 void syncTime() {
   DateTime now = rtc.now();
   hours = now.hour();
   minutes = now.minute();
   seconds = now.second();
+  resetTimeSyncTimer();
+}
 
+void resetRtcTimers() {
+  resetTimeSyncTimer();
+  resetRtcCorrectionTimer();
+}
+
+void resetTimeSyncTimer() {
   timeToSyncMinutes = TIME_SYNC_TIMEOUT_MINUTES;
+}
+
+void resetRtcCorrectionTimer() {
+  timeToCorrectMinutes = RTC_CORRECTION_INTERVAL_MINUTES;
 }
 
 void changeBrightness() {
