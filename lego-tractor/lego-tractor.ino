@@ -1,49 +1,104 @@
 #include <IBusBM.h>
 
-// #define TRACING
+// #define DEBUG
 
-#define MOTOR_A 0
-#define MOTOR_B 1
+const byte MOTOR_A = 0;
+const byte MOTOR_B = 1;
 
-#define MOTOR_STATE_BRAKE    0
-#define MOTOR_STATE_FORWARD  1
-#define MOTOR_STATE_REVERSE -1
+const byte MOTOR_COUNT = 2;
 
-#define CHANNEL_MIN_VALUE 1000
-#define CHANNEL_MAX_VALUE 2000
-#define CHANNEL_CORRECTION 40
+const int MOTOR_STATE_BRAKE   = 0;
+const int MOTOR_STATE_FORWARD = 1;
+const int MOTOR_STATE_REVERSE = -1;
 
-#define STICK_DEAD_ZONE_MIN CHANNEL_MIN_VALUE + (CHANNEL_MAX_VALUE - CHANNEL_MIN_VALUE) / 2 - 15
-#define STICK_DEAD_ZONE_MAX CHANNEL_MIN_VALUE + (CHANNEL_MAX_VALUE - CHANNEL_MIN_VALUE) / 2 + 15
+const int DUTY_MIN_VALUE  = -255;
+const int DUTY_MAX_VALUE  = 255;
+const int DUTY_STOP_VALUE = 0;
+const byte DUTY_ABSOLUTE_MAX_VALUE = 255;
 
-#define BATTERY_STATUS_OK         1
-#define BATTERY_STATUS_LOW        2
-#define BATTERY_STATUS_DISCHARGED 3
+const int CHANNEL_READ_TIMEOUT_VALUE = 0;
+const int CHANNEL_MIN_VALUE = 1000;
+const int CHANNEL_MAX_VALUE = 2000;
+const int CHANNEL_CORRECTION = 40;
+const int CHANNEL_CENTER_VALUE = CHANNEL_MIN_VALUE + (CHANNEL_MAX_VALUE - CHANNEL_MIN_VALUE) / 2;
+const unsigned long CHANNEL_PULSE_TIMEOUT_US = 30000UL;
 
-#define ENA_PIN  3
-#define ENB_PIN  5
-#define MC1A_PIN 7
-#define MC2A_PIN 6
-#define MC1B_PIN 2
-#define MC2B_PIN 4
+const int STICK_DEAD_ZONE_RADIUS = 15;
+const int STICK_DEAD_ZONE_MIN = CHANNEL_CENTER_VALUE - STICK_DEAD_ZONE_RADIUS;
+const int STICK_DEAD_ZONE_MAX = CHANNEL_CENTER_VALUE + STICK_DEAD_ZONE_RADIUS;
 
-#define CH1_PIN 10 
-#define CH2_PIN 11
-#define CH5_PIN 12
+const byte BATTERY_STATUS_UNKNOWN    = 0;
+const byte BATTERY_STATUS_OK         = 1;
+const byte BATTERY_STATUS_LOW        = 2;
+const byte BATTERY_STATUS_DISCHARGED = 3;
 
-#define LIGHTS_PIN 13
+const unsigned long BATTERY_UPDATE_INTERVAL_MS = 100UL;
+const byte BATTERY_READ_COUNT = 32;
+const float BATTERY_VOLTAGE_DIVIDER_RATIO = 3.0;
+const float BATTERY_OK_MIN_VOLTAGE = 6.5;
+const float BATTERY_LOW_MIN_VOLTAGE = 6.0;
+const float BATTERY_VOLTAGE_ROUND_FACTOR = 10.0;
+const float BATTERY_TELEMETRY_SCALE = 100.0;
+const byte BATTERY_TELEMETRY_SENSOR_INDEX = 1;
+const byte BATTERY_LOW_GREEN_PWM = 128;
 
-#define BATTERY_SENSOR_PIN A0
+const float ADC_REFERENCE_VOLTAGE = 5.0;
+const float ADC_RESOLUTION = 1024.0;
 
-#define BATTERY_INDICATOR_R_PIN 8
-#define BATTERY_INDICATOR_G_PIN 9
+const float GEAR_TRAIN_COMPENSATION_BASE   = 40.0;
+const float GEAR_TRAIN_COMPENSATION_FACTOR = 0.16;
+
+const byte ENA_PIN  = 3;
+const byte ENB_PIN  = 5;
+const byte MC1A_PIN = 7;
+const byte MC2A_PIN = 6;
+const byte MC1B_PIN = 2;
+const byte MC2B_PIN = 4;
+
+const byte CH1_PIN = 10;
+const byte CH2_PIN = 11;
+const byte CH5_PIN = 12;
+
+const byte LIGHTS_PIN = 13;
+const byte BATTERY_SENSOR_PIN = A0;
+const byte BATTERY_INDICATOR_R_PIN = 8;
+const byte BATTERY_INDICATOR_G_PIN = 9;
+
+struct MotorPins {
+  byte enablePin;
+  byte controlPin1;
+  byte controlPin2;
+  bool compensateGearTrain;
+};
+
+const MotorPins MOTORS[MOTOR_COUNT] = {
+  {ENA_PIN, MC1A_PIN, MC2A_PIN, false},
+  {ENB_PIN, MC1B_PIN, MC2B_PIN, true}
+};
 
 IBusBM IBus;
 
-int motorStates[2] = {MOTOR_STATE_BRAKE, MOTOR_STATE_BRAKE};
-unsigned long batteryTimer;
-bool lightsOn;
-int batteryStatus;
+int motorStates[MOTOR_COUNT] = {MOTOR_STATE_BRAKE, MOTOR_STATE_BRAKE};
+unsigned long batteryTimer = 0;
+bool lightsOn = false;
+byte batteryStatus = BATTERY_STATUS_UNKNOWN;
+
+void updateMotors();
+void updateLights();
+void setLights(bool enabled);
+void updateBattery(bool force);
+byte getBatteryStatus(float voltage);
+float readBatteryVoltage();
+void setBatteryStatus(byte status);
+void brakeMotors();
+void driveOrBrakeMotor(byte motor, int duty);
+int getMotorState(int duty);
+void applyMotorState(MotorPins pins, int state);
+int compensateGearTrain(int duty);
+int readChannel(byte channel);
+const char* getChannelName(byte channel);
+int readStick(byte channel, int minValue, int maxValue);
+bool readSwitch(byte channel);
 
 void setup() {
   Serial.begin(115200);
@@ -51,45 +106,47 @@ void setup() {
   IBus.begin(Serial);
   IBus.addSensor(IBUSS_EXTV);
 
-  pinMode(ENA_PIN, OUTPUT);
-  pinMode(ENB_PIN, OUTPUT);
-  pinMode(MC1A_PIN, OUTPUT);
-  pinMode(MC2A_PIN, OUTPUT);
-  pinMode(MC1B_PIN, OUTPUT);
-  pinMode(MC2B_PIN, OUTPUT);
+  pinMode(CH1_PIN, INPUT);
+  pinMode(CH2_PIN, INPUT);
+  pinMode(CH5_PIN, INPUT);
   pinMode(LIGHTS_PIN, OUTPUT);
   pinMode(BATTERY_INDICATOR_R_PIN, OUTPUT);
   pinMode(BATTERY_INDICATOR_G_PIN, OUTPUT);
-
-  driveOrBrakeMotor(MOTOR_A, 0);
-  driveOrBrakeMotor(MOTOR_B, 0);
-
-  updateBattery();
-  if (batteryStatus == BATTERY_STATUS_DISCHARGED) {
-    while (true) {}
+  for (byte motor = MOTOR_A; motor < MOTOR_COUNT; motor++) {
+    pinMode(MOTORS[motor].enablePin, OUTPUT);
+    pinMode(MOTORS[motor].controlPin1, OUTPUT);
+    pinMode(MOTORS[motor].controlPin2, OUTPUT);
   }
+
+  setLights(false);
+  brakeMotors();
+  updateBattery(true);
 }
 
 void loop() {
   IBus.loop();
 
-  updateMotors();
+  updateBattery(false);
   updateLights();
-  updateBattery();
+  if (batteryStatus == BATTERY_STATUS_DISCHARGED) {
+    brakeMotors();
+    return;
+  }
+  updateMotors();
 
-  #ifdef TRACING
+  #ifdef DEBUG
   delay(500);
   #endif
 }
 
 void updateMotors() {
-  int x = readStick(CH1_PIN, -255, 255);
-  int y = readStick(CH2_PIN, -255, 255);
+  int x = readStick(CH1_PIN, DUTY_MIN_VALUE, DUTY_MAX_VALUE);
+  int y = readStick(CH2_PIN, DUTY_MIN_VALUE, DUTY_MAX_VALUE);
+  
+  int rightDuty = constrain(y + x, DUTY_MIN_VALUE, DUTY_MAX_VALUE);
+  int leftDuty = constrain(y - x, DUTY_MIN_VALUE, DUTY_MAX_VALUE);
 
-  int rightDuty = constrain(y + x, -255, 255);
-  int leftDuty = constrain(y - x, -255, 255);
-
-  #ifdef TRACING
+  #ifdef DEBUG
   Serial.print("Right duty: ");
   Serial.println(rightDuty);
   Serial.print("Left duty: ");
@@ -101,141 +158,166 @@ void updateMotors() {
 }
 
 void updateLights() {
-  if (lightsOn != readSwitch(CH5_PIN)) {
-    lightsOn = !lightsOn;
-    if (lightsOn) {
-      digitalWrite(LIGHTS_PIN, HIGH);
-    } else {
-      digitalWrite(LIGHTS_PIN, LOW);
-    }
+  bool newLightsOn = readSwitch(CH5_PIN);
+  if (lightsOn != newLightsOn) {
+    setLights(newLightsOn);
   }
 }
 
-void updateBattery() {
+void setLights(bool enabled) {
+  lightsOn = enabled;
+  digitalWrite(LIGHTS_PIN, lightsOn ? HIGH : LOW);
+}
+
+void updateBattery(bool force) {
   unsigned long now = millis();
-  if (now - batteryTimer >= 100) {
-    batteryTimer = now;
-
-    int status;
-    float voltage = readBatteryVoltage();
-    if (voltage > 6.5) {
-      status = BATTERY_STATUS_OK;
-    } else if (voltage > 6.0) {
-      status = BATTERY_STATUS_LOW;
-    } else {
-      status = BATTERY_STATUS_DISCHARGED;
-    }
-
-    setBatteryStatus(status);
-    IBus.setSensorMeasurement(1, voltage * 100);
+  if (!force && now - batteryTimer < BATTERY_UPDATE_INTERVAL_MS) {
+    return;
   }
+
+  batteryTimer = now;
+  float voltage = readBatteryVoltage();
+  setBatteryStatus(getBatteryStatus(voltage));
+  IBus.setSensorMeasurement(BATTERY_TELEMETRY_SENSOR_INDEX, (uint16_t) round(voltage * BATTERY_TELEMETRY_SCALE));
+}
+
+
+byte getBatteryStatus(float voltage) {
+  if (voltage > BATTERY_OK_MIN_VOLTAGE) {
+    return BATTERY_STATUS_OK;
+  }
+  if (voltage > BATTERY_LOW_MIN_VOLTAGE) {
+    return BATTERY_STATUS_LOW;
+  }
+  return BATTERY_STATUS_DISCHARGED;
 }
 
 float readBatteryVoltage() {
-  int readNumber = 32;
-  float sum = 0;
-  float f = 5.0 / 1024.0 * 3.0;
-  for (int i = 0; i < readNumber; i++) {
-    sum += (float) analogRead(BATTERY_SENSOR_PIN) * f;
+  float sum = 0.0;
+  float conversionFactor = ADC_REFERENCE_VOLTAGE / ADC_RESOLUTION * BATTERY_VOLTAGE_DIVIDER_RATIO;
+  for (byte i = 0; i < BATTERY_READ_COUNT; i++) {
+    sum += (float) analogRead(BATTERY_SENSOR_PIN) * conversionFactor;
   }
-  return round(sum / (float) readNumber * 10.0) / 10.0;
+  return round(sum / (float) BATTERY_READ_COUNT * BATTERY_VOLTAGE_ROUND_FACTOR) / BATTERY_VOLTAGE_ROUND_FACTOR;
 }
 
-void setBatteryStatus(int status) {
-  if (batteryStatus != status) {
-    batteryStatus = status;
-    if (status == BATTERY_STATUS_OK) {
-      digitalWrite(BATTERY_INDICATOR_R_PIN, LOW);
-      digitalWrite(BATTERY_INDICATOR_G_PIN, HIGH);
-    } else if (status == BATTERY_STATUS_LOW) {
-      digitalWrite(BATTERY_INDICATOR_R_PIN, HIGH);
-      analogWrite(BATTERY_INDICATOR_G_PIN, 128);
-    } else {
-      digitalWrite(BATTERY_INDICATOR_R_PIN, HIGH);
-      digitalWrite(BATTERY_INDICATOR_G_PIN, LOW);
-    }
+void setBatteryStatus(byte status) {
+  if (batteryStatus == status) {
+    return;
   }
-}
 
-void driveOrBrakeMotor(int motor, int duty) {
-  int enPin, mc1Pin, mc2Pin;
-  if (motor == MOTOR_A) {
-    enPin = ENA_PIN;
-    mc1Pin = MC1A_PIN;
-    mc2Pin = MC2A_PIN;
+  batteryStatus = status;
+  if (status == BATTERY_STATUS_OK) {
+    digitalWrite(BATTERY_INDICATOR_R_PIN, LOW);
+    digitalWrite(BATTERY_INDICATOR_G_PIN, HIGH);
+  } else if (status == BATTERY_STATUS_LOW) {
+    digitalWrite(BATTERY_INDICATOR_R_PIN, HIGH);
+    analogWrite(BATTERY_INDICATOR_G_PIN, BATTERY_LOW_GREEN_PWM);
   } else {
-    enPin = ENB_PIN;
-    mc1Pin = MC1B_PIN;
-    mc2Pin = MC2B_PIN;
+    digitalWrite(BATTERY_INDICATOR_R_PIN, HIGH);
+    digitalWrite(BATTERY_INDICATOR_G_PIN, LOW);
+  }
+}
+
+void brakeMotors() {
+  for (byte motor = MOTOR_A; motor < MOTOR_COUNT; motor++) {
+    driveOrBrakeMotor(motor, DUTY_STOP_VALUE);
+  }
+}
+
+void driveOrBrakeMotor(byte motor, int duty) {
+  if (motor >= MOTOR_COUNT) {
+    return;
   }
 
-  int newState = duty == 0 ? MOTOR_STATE_BRAKE : (duty > 0 ? MOTOR_STATE_FORWARD : MOTOR_STATE_REVERSE);
+  int constrainedDuty = constrain(duty, DUTY_MIN_VALUE, DUTY_MAX_VALUE);
+  int newState = getMotorState(constrainedDuty);
+  MotorPins pins = MOTORS[motor];
   if (newState != motorStates[motor]) {
-    if (newState == MOTOR_STATE_BRAKE) {
-      digitalWrite(enPin, LOW);
-      digitalWrite(mc1Pin, LOW);
-      digitalWrite(mc2Pin, LOW);
-    } else if (newState == MOTOR_STATE_FORWARD) {
-      digitalWrite(enPin, LOW);
-      digitalWrite(mc1Pin, HIGH);
-      digitalWrite(mc2Pin, LOW);
-    } else {
-      digitalWrite(enPin, LOW);
-      digitalWrite(mc1Pin, LOW);
-      digitalWrite(mc2Pin, HIGH);
-    }
-
+    applyMotorState(pins, newState);
     motorStates[motor] = newState;
   }
 
-  if (motor == MOTOR_B) {
-    duty = compensateGearTrain(duty);
+  if (pins.compensateGearTrain) {
+    constrainedDuty = compensateGearTrain(constrainedDuty);
   }
-  analogWrite(enPin, abs(duty));
+  analogWrite(pins.enablePin, abs(constrainedDuty));
+}
+
+int getMotorState(int duty) {
+  if (duty == DUTY_STOP_VALUE) {
+    return MOTOR_STATE_BRAKE;
+  }
+  return duty > DUTY_STOP_VALUE ? MOTOR_STATE_FORWARD : MOTOR_STATE_REVERSE;
+}
+
+void applyMotorState(MotorPins pins, int state) {
+  digitalWrite(pins.enablePin, LOW);
+  if (state == MOTOR_STATE_FORWARD) {
+    digitalWrite(pins.controlPin1, HIGH);
+    digitalWrite(pins.controlPin2, LOW);
+  } else if (state == MOTOR_STATE_REVERSE) {
+    digitalWrite(pins.controlPin1, LOW);
+    digitalWrite(pins.controlPin2, HIGH);
+  } else {
+    digitalWrite(pins.controlPin1, LOW);
+    digitalWrite(pins.controlPin2, LOW);
+  }
 }
 
 int compensateGearTrain(int duty) {
-  if (duty == 0) {
-    return 0;
+  if (duty == DUTY_STOP_VALUE) {
+    return DUTY_STOP_VALUE;
   }
 
-  float f = 40.0 - (float) abs(duty) * 0.16;
-  if (duty > 0) {
-    return min(duty + f, 255);
-  }
-  return max(duty - f, -255);
+  int absoluteDuty = abs(duty);
+  float compensation = max(0.0, GEAR_TRAIN_COMPENSATION_BASE - (float) absoluteDuty * GEAR_TRAIN_COMPENSATION_FACTOR);
+  int compensatedDuty = absoluteDuty + (int) round(compensation);
+  compensatedDuty = constrain(compensatedDuty, DUTY_STOP_VALUE, DUTY_ABSOLUTE_MAX_VALUE);
+  return duty > DUTY_STOP_VALUE ? compensatedDuty : -compensatedDuty;
 }
 
-int readChannel(int channel) {
-  int val = pulseIn(channel, HIGH, 30000);
-  
-  #ifdef TRACING
+int readChannel(byte channel) {
+  unsigned long pulseWidth = pulseIn(channel, HIGH, CHANNEL_PULSE_TIMEOUT_US);
+
+  #ifdef DEBUG
   Serial.print("Channel ");
-  if (channel == CH1_PIN) {
-    Serial.print("1");
-  } else if (channel == CH2_PIN) {
-    Serial.print("2");
-  } else {
-    Serial.print("3");
-  }
+  Serial.print(getChannelName(channel));
   Serial.print(": ");
-  Serial.println(val);
+  Serial.println(pulseWidth);
   #endif
 
-  if (val == 0) {
-    return 0;
+  if (pulseWidth == CHANNEL_READ_TIMEOUT_VALUE) {
+    return CHANNEL_READ_TIMEOUT_VALUE;
   }
-  return constrain(val + CHANNEL_CORRECTION, CHANNEL_MIN_VALUE, CHANNEL_MAX_VALUE);
+  return constrain((int) pulseWidth + CHANNEL_CORRECTION, CHANNEL_MIN_VALUE, CHANNEL_MAX_VALUE);
 }
 
-int readStick(int channel, int minVal, int maxVal) {
-  int val = readChannel(channel);
-  if (val == 0 || (val >= STICK_DEAD_ZONE_MIN && val <= STICK_DEAD_ZONE_MAX)) {
-    return 0;
+const char* getChannelName(byte channel) {
+  if (channel == CH1_PIN) {
+    return "1";
   }
-  return map(val, CHANNEL_MIN_VALUE, CHANNEL_MAX_VALUE, minVal, maxVal);
+  if (channel == CH2_PIN) {
+    return "2";
+  }
+  if (channel == CH5_PIN) {
+    return "5";
+  }
+  return "?";
 }
 
-bool readSwitch(int channel) {
-  return map(readChannel(channel), CHANNEL_MIN_VALUE, CHANNEL_MAX_VALUE, 0, 100) > 50;
+int readStick(byte channel, int minValue, int maxValue) {
+  int value = readChannel(channel);
+  if (value == CHANNEL_READ_TIMEOUT_VALUE || (value >= STICK_DEAD_ZONE_MIN && value <= STICK_DEAD_ZONE_MAX)) {
+    return DUTY_STOP_VALUE;
+  }
+  return map(value, CHANNEL_MIN_VALUE, CHANNEL_MAX_VALUE, minValue, maxValue);
+}
+
+bool readSwitch(byte channel) {
+  int value = readChannel(channel);
+  if (value == CHANNEL_READ_TIMEOUT_VALUE) {
+    return false;
+  }
+  return value > CHANNEL_CENTER_VALUE;
 }
