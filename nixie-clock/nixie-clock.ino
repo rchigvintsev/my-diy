@@ -1,12 +1,36 @@
-/*
- * Based on the code from Alex Gyver repository (https://github.com/AlexGyver/NixieClock_v2).
- */
+/// Прошивка часов на газоразрядных индикаторах.
+///
+/// Основано на коде из репозитория Alex Gyver:
+/// https://github.com/AlexGyver/NixieClock_v2.
 
 #include <Wire.h>
 #include <RTClib.h>
 #include <EEPROM.h>
 
-#define DUTY 180
+const byte GENERATOR_DUTY = 180;
+const byte INDICATOR_COUNT = 4;
+const byte DECODER_PIN_COUNT = 4;
+const byte BUTTON_COUNT = 3;
+const byte FIGURE_COUNT = 10;
+const byte LAST_INDICATOR_INDEX = INDICATOR_COUNT - 1;
+const byte BACKLIGHT_MODES_NUMBER = 3;
+const byte EEPROM_FIRST_START_MARK = 100;
+
+const byte HOURS_PER_DAY      = 24;
+const byte MINUTES_PER_HOUR   = 60;
+const byte SECONDS_PER_MINUTE = 60;
+
+const byte MAX_HOUR_VALUE   = HOURS_PER_DAY - 1;
+const byte MAX_MINUTE_VALUE = MINUTES_PER_HOUR - 1;
+
+const unsigned long HALF_SECOND_INTERVAL_MILLIS = 500UL;
+const unsigned long SETUP_TIMER_INTERVAL_MILLIS = 100UL;
+
+const byte RANDOM_SEED_CHANNEL_1 = 6;
+const byte RANDOM_SEED_CHANNEL_2 = 7;
+
+const byte TIMER1_PWM_PRESCALER_1 = 0b00000001;
+const byte TIMER2_PWM_PRESCALER_8 = 0b00000010;
 
 #define FORCE_RTC_ADJUST false
 #define INDICATOR_SWITCH_THRESHOLD 25
@@ -38,12 +62,21 @@
 #define GLITCH_MIN_INTERVAL_MILLIS  30000
 #define GLITCH_MAX_INTERVAL_MILLIS 120000
 
+const byte GLITCH_MIN_SECOND = 5;
+const byte GLITCH_MAX_SECOND = 55;
+const byte GLITCH_MIN_BLINK_COUNT = 2;
+const byte GLITCH_MAX_BLINK_COUNT_EXCLUSIVE = 6;
+const byte GLITCH_MIN_INTERVAL_STEP = 1;
+const byte GLITCH_MAX_INTERVAL_STEP_EXCLUSIVE = 6;
+const byte GLITCH_INTERVAL_STEP_MILLIS = 20;
+
 #define BUTTON_DEBOUNCE_TIMEOUT_MILLIS  60
 #define BUTTON_HOLD_TIMEOUT_MILLIS     500
 
-#define BUTTON_STATE_RELEASED 0
-#define BUTTON_STATE_PRESSED  1
-#define BUTTON_STATE_HELD     2
+#define BUTTON_STATE_RELEASED     0
+#define BUTTON_STATE_PRESSED      1
+#define BUTTON_STATE_HELD         2
+#define BUTTON_STATE_HOLD_HANDLED 3
 
 #define CLOCK_STATE_NORMAL 0
 #define CLOCK_STATE_SETUP  1
@@ -84,24 +117,25 @@
 #define EEPROM_KEY_BACKLIGHT_MODE      1
 #define EEPROM_KEY_GLITCHES_ENABLED    2
 
-const byte INDICATOR_PINS[] = {INDICATOR1_PIN, INDICATOR2_PIN, INDICATOR3_PIN, INDICATOR4_PIN};
-const byte FIGURE_MASKS[] = {0b00001001, 0b00001000, 0b00000000, 0b00000101, 0b00000100, 0b00000111, 0b00000011, 0b00000110, 0b00000010, 0b00000001};
-const byte CATHODE_ORDER[] = {1, 0, 2, 9, 3, 8, 4, 7, 5, 6};
+const byte INDICATOR_PINS[INDICATOR_COUNT] = {INDICATOR1_PIN, INDICATOR2_PIN, INDICATOR3_PIN, INDICATOR4_PIN};
+const byte DECODER_PINS[DECODER_PIN_COUNT] = {DECODER0_PIN, DECODER1_PIN, DECODER2_PIN, DECODER3_PIN};
+const byte FIGURE_MASKS[FIGURE_COUNT] = {0b00001001, 0b00001000, 0b00000000, 0b00000101, 0b00000100, 0b00000111, 0b00000011, 0b00000110, 0b00000010, 0b00000001};
+const byte CATHODE_ORDER[FIGURE_COUNT] = {1, 0, 2, 9, 3, 8, 4, 7, 5, 6};
 
 volatile byte indicatorMaxBrightness;
 int indicatorBrightnessCounter;
 boolean indicatorBrightnessRaising;
-volatile byte indicatorStates[4] = {HIGH, HIGH, HIGH, HIGH};
-volatile byte indicatorBrightnessCounters[4];
-volatile byte indicatorDimmingThresholds[4];
+volatile byte indicatorStates[INDICATOR_COUNT] = {HIGH, HIGH, HIGH, HIGH};
+volatile byte indicatorBrightnessCounters[INDICATOR_COUNT];
+volatile byte indicatorDimmingThresholds[INDICATOR_COUNT];
 volatile byte currentIndicator;
 
 byte hours, minutes, seconds;
 byte userHours, userMinutes;
 
-volatile byte figures[4];
-byte nextFigures[4];
-boolean changedFigures[4];
+volatile byte figures[INDICATOR_COUNT];
+byte nextFigures[INDICATOR_COUNT];
+boolean changedFigures[INDICATOR_COUNT];
 
 boolean halfSecondPassed;
 boolean clockUpdateRequired;
@@ -130,20 +164,20 @@ byte glitchCounterThreshold;
 unsigned long glitchTimerInterval;
 #endif
 
-int buttonStates[3];
-boolean buttonDebounceStates[3];
-unsigned long buttonDebounceTimes[3];
-byte buttonClickCounters[3];
+int buttonStates[BUTTON_COUNT];
+boolean buttonDebounceStates[BUTTON_COUNT];
+unsigned long buttonDebounceTimes[BUTTON_COUNT];
+byte buttonClickCounters[BUTTON_COUNT];
 
 volatile byte clockState = CLOCK_STATE_NORMAL;
 byte nextClockState = CLOCK_STATE_SETUP;
 volatile boolean adjustingHours = true;
 
 byte clockEffect = CLOCK_EFFECT_NONE;
-const unsigned long CLOCK_EFFECT_TIMER_INTERVALS[] = {0, 130, 50, 40, 80, 80};
+const unsigned long CLOCK_EFFECT_TIMER_INTERVALS[CLOCK_EFFECTS_NUMBER] = {0, 130, 50, 40, 80, 80};
 boolean clockEffectInitialized;
-byte startingCathodes[4];
-byte endingCathodes[4];
+byte startingCathodes[INDICATOR_COUNT];
+byte endingCathodes[INDICATOR_COUNT];
 byte trainCounter;
 boolean trainLeaving;
 byte rubberBandCounter;
@@ -194,20 +228,55 @@ const byte CRT_GAMMA[256] PROGMEM = {
   241,  243,  245,  247,  249,  251,  253,  255,
 };
 
+void initializePersistentSettings() {
+  if (EEPROM.read(EEPROM_KEY_FIRST_START) == EEPROM_FIRST_START_MARK) {
+    return;
+  }
+
+  EEPROM.update(EEPROM_KEY_FIRST_START, EEPROM_FIRST_START_MARK);
+  EEPROM.put(EEPROM_KEY_CLOCK_EFFECT, clockEffect);
+  EEPROM.put(EEPROM_KEY_BACKLIGHT_MODE, backlightMode);
+
+  #if GLITCHES_ALLOWED
+  EEPROM.put(EEPROM_KEY_GLITCHES_ENABLED, glitchesEnabled);
+  #endif
+}
+
+void normalizePersistentSettings() {
+  if (clockEffect >= CLOCK_EFFECTS_NUMBER) {
+    clockEffect = CLOCK_EFFECT_NONE;
+    EEPROM.put(EEPROM_KEY_CLOCK_EFFECT, clockEffect);
+  }
+
+  if (backlightMode >= BACKLIGHT_MODES_NUMBER) {
+    backlightMode = BACKLIGHT_MODE_BREATHING;
+    EEPROM.put(EEPROM_KEY_BACKLIGHT_MODE, backlightMode);
+  }
+}
+
+void loadPersistentSettings() {
+  EEPROM.get(EEPROM_KEY_CLOCK_EFFECT, clockEffect);
+  EEPROM.get(EEPROM_KEY_BACKLIGHT_MODE, backlightMode);
+
+  #if GLITCHES_ALLOWED
+  EEPROM.get(EEPROM_KEY_GLITCHES_ENABLED, glitchesEnabled);
+  glitchesEnabled = glitchesEnabled ? true : false;
+  #endif
+
+  normalizePersistentSettings();
+}
+
 void setup() {
   Serial.begin(9600);
 
-  randomSeed(analogRead(6) + analogRead(7));
+  randomSeed(analogRead(RANDOM_SEED_CHANNEL_1) + analogRead(RANDOM_SEED_CHANNEL_2));
 
-  pinMode(INDICATOR1_PIN, OUTPUT);
-  pinMode(INDICATOR2_PIN, OUTPUT);
-  pinMode(INDICATOR3_PIN, OUTPUT);
-  pinMode(INDICATOR4_PIN, OUTPUT);
-
-  pinMode(DECODER0_PIN, OUTPUT);
-  pinMode(DECODER1_PIN, OUTPUT);
-  pinMode(DECODER2_PIN, OUTPUT);
-  pinMode(DECODER3_PIN, OUTPUT);
+  for (byte i = 0; i < INDICATOR_COUNT; i++) {
+    pinMode(INDICATOR_PINS[i], OUTPUT);
+  }
+  for (byte i = 0; i < DECODER_PIN_COUNT; i++) {
+    pinMode(DECODER_PINS[i], OUTPUT);
+  }
 
   pinMode(DOT_PIN, OUTPUT);
   pinMode(BACKLIGHT_PIN, OUTPUT);
@@ -217,18 +286,19 @@ void setup() {
   pinMode(BUTTON_LEFT_PIN, INPUT_PULLUP);
   pinMode(BUTTON_RIGHT_PIN, INPUT_PULLUP);
 
-  // Change PWM frequency to 31.4 KHz for Timer 1 (D9/D10 pins)
-  TCCR1B = 0b00000001;
+  // Устанавливаем частоту ШИМ 31,4 кГц для Timer 1 на пинах D9/D10.
+  TCCR1B = TIMER1_PWM_PRESCALER_1;
 
-  analogWrite(GENERATOR_PIN, DUTY);
+  analogWrite(GENERATOR_PIN, GENERATOR_DUTY);
 
-  // Change PWM frequency to 7.8 KHz for Timer 2 (D3/D11 pins)
-  TCCR2B = 0b00000010;
+  // Устанавливаем частоту ШИМ 7,8 кГц для Timer 2 на пинах D3/D11.
+  TCCR2B = TIMER2_PWM_PRESCALER_8;
 
-  TCCR2A |= (1 << WGM21);
-  TIMSK2 |= (1 << OCIE2A);
+  TCCR2A |= (1 << WGM20) | (1 << WGM21);
+  TIMSK2 = (TIMSK2 & ~(1 << OCIE2A)) | (1 << TOIE2);
 
   rtc.begin();
+
   if (rtc.lostPower() || FORCE_RTC_ADJUST) {
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   }
@@ -237,20 +307,8 @@ void setup() {
   minutes = now.minute();
   seconds = now.second();
 
-  if (EEPROM.read(EEPROM_KEY_FIRST_START) != 100) {
-    EEPROM.put(EEPROM_KEY_FIRST_START, 100);
-    EEPROM.put(EEPROM_KEY_CLOCK_EFFECT, clockEffect);
-    EEPROM.put(EEPROM_KEY_BACKLIGHT_MODE, backlightMode);
-    #if GLITCHES_ALLOWED
-    EEPROM.put(EEPROM_KEY_GLITCHES_ENABLED, glitchesEnabled);
-    #endif
-  }
-  EEPROM.get(EEPROM_KEY_CLOCK_EFFECT, clockEffect);
-  EEPROM.get(EEPROM_KEY_BACKLIGHT_MODE, backlightMode);
-  #if GLITCHES_ALLOWED
-  EEPROM.get(EEPROM_KEY_GLITCHES_ENABLED, glitchesEnabled);
-  #endif
-
+  initializePersistentSettings();
+  loadPersistentSettings();
   showTime(hours, minutes);
   changeBrightness();
 
@@ -270,59 +328,75 @@ void loop() {
 }
 
 void updateTime() {
-  if (isTimeUpdateRequired()) {
-    halfSecondPassed = !halfSecondPassed;
-    if (!halfSecondPassed) {
-      // Whole second passed since last increment
-      dotTurnedOn = true;
+  if (!isTimeUpdateRequired()) {
+    return;
+  }
 
-      seconds++;
-      if (seconds > 59) {
-        seconds = 0;
-        minutes++;
+  halfSecondPassed = !halfSecondPassed;
+  if (halfSecondPassed) {
+    return;
+  }
 
-        clockUpdateRequired = true;
+  // Прошла целая секунда с момента последнего увеличения времени.
+  dotTurnedOn = true;
+  seconds++;
+  if (seconds >= SECONDS_PER_MINUTE) {
+    seconds = 0;
+    minutes++;
+    clockUpdateRequired = true;
 
-        if (--timeToSyncMinutes == 0) {
-          syncTime();
-        }
-
-        if (minutes % ANTI_POISONING_INTERVAL_MINUTES == 0) {
-          runAntiPoisoning();
-        }
-      }
-
-      if (minutes > 59) {
-        minutes = 0;
-        hours++;
-
-        if (hours > 23) {
-          hours = 0;
-        }
-
-        changeBrightness();
-      }
+    if (timeToSyncMinutes > 0) {
+      timeToSyncMinutes--;
     }
+    if (timeToSyncMinutes == 0) {
+      syncTime();
+    }
+
+    if (ANTI_POISONING_INTERVAL_MINUTES > 0 && minutes % ANTI_POISONING_INTERVAL_MINUTES == 0) {
+      runAntiPoisoning();
+    }
+  }
+
+  if (minutes >= MINUTES_PER_HOUR) {
+    minutes = 0;
+    hours++;
+
+    if (hours >= HOURS_PER_DAY) {
+      hours = 0;
+    }
+
+    changeBrightness();
   }
 }
 
 void updateClock() {
-  if (clockUpdateRequired && clockState == CLOCK_STATE_NORMAL) {
-    if (clockEffect == CLOCK_EFFECT_NONE) {
+  if (!clockUpdateRequired || clockState != CLOCK_STATE_NORMAL) {
+    return;
+  }
+
+  switch (clockEffect) {
+    case CLOCK_EFFECT_NONE:
       updateClockEffectNone();
-    } else {
-      if (clockEffect == CLOCK_EFFECT_FADING) {
-        updateClockEffectFading();
-      } else if (clockEffect == CLOCK_EFFECT_FIGURE_REWIND) {
-        updateClockEffectFigureRewind();
-      } else if (clockEffect == CLOCK_EFFECT_CATHODE_REWIND) {
-        updateClockEffectCathodeRewind();
-      } else if (clockEffect == CLOCK_EFFECT_TRAIN) {
-        updateClockEffectTrain();
-      } else if (clockEffect == CLOCK_EFFECT_RUBBER_BAND) {
-        updateClockEffectRubberBand();
-      }
-    }
+      break;
+    case CLOCK_EFFECT_FADING:
+      updateClockEffectFading();
+      break;
+    case CLOCK_EFFECT_FIGURE_REWIND:
+      updateClockEffectFigureRewind();
+      break;
+    case CLOCK_EFFECT_CATHODE_REWIND:
+      updateClockEffectCathodeRewind();
+      break;
+    case CLOCK_EFFECT_TRAIN:
+      updateClockEffectTrain();
+      break;
+    case CLOCK_EFFECT_RUBBER_BAND:
+      updateClockEffectRubberBand();
+      break;
+    default:
+      clockEffect = CLOCK_EFFECT_NONE;
+      updateClockEffectNone();
+      break;
   }
 }
 
@@ -334,7 +408,7 @@ void updateClockEffectNone() {
 void updateClockEffectFading() {
   if (!clockEffectInitialized) {
     showNextTime(hours, minutes);
-    for (byte i = 0; i < 4; i++) {
+    for (byte i = 0; i < INDICATOR_COUNT; i++) {
       changedFigures[i] = figures[i] != nextFigures[i];
     }
 
@@ -359,7 +433,7 @@ void updateClockEffectFading() {
       }
     }
 
-    for (byte i = 0; i < 4; i++) {
+    for (byte i = 0; i < INDICATOR_COUNT; i++) {
       if (changedFigures[i]) {
         indicatorDimmingThresholds[i] = indicatorBrightnessCounter;
       }
@@ -370,7 +444,7 @@ void updateClockEffectFading() {
 void updateClockEffectFigureRewind() {
   if (!clockEffectInitialized) {
     showNextTime(hours, minutes);
-    for (byte i = 0; i < 4; i++) {
+    for (byte i = 0; i < INDICATOR_COUNT; i++) {
       changedFigures[i] = figures[i] != nextFigures[i];
     }
 
@@ -379,13 +453,14 @@ void updateClockEffectFigureRewind() {
 
   if (isClockEffectUpdateRequired()) {
     byte unchangedFigureCounter = 0;
-    for (byte i = 0; i < 4; i++) {
+    for (byte i = 0; i < INDICATOR_COUNT; i++) {
       if (changedFigures[i]) {
         if (figures[i] == 0) {
-          figures[i] = 9;
+          figures[i] = FIGURE_COUNT - 1;
         } else {
           figures[i]--;
         }
+
         if (figures[i] == nextFigures[i]) {
           changedFigures[i] = false;
         }
@@ -394,7 +469,7 @@ void updateClockEffectFigureRewind() {
       }
     }
 
-    if (unchangedFigureCounter == 4) {
+    if (unchangedFigureCounter == INDICATOR_COUNT) {
       clockEffectInitialized = false;
       clockUpdateRequired = false;
     }
@@ -404,13 +479,14 @@ void updateClockEffectFigureRewind() {
 void updateClockEffectCathodeRewind() {
   if (!clockEffectInitialized) {
     showNextTime(hours, minutes);
-    for (byte i = 0; i < 4; i++) {
+    for (byte i = 0; i < INDICATOR_COUNT; i++) {
       changedFigures[i] = figures[i] != nextFigures[i];
       if (changedFigures[i]) {
-        for (byte j = 0; j < 10; j++) {
+        for (byte j = 0; j < FIGURE_COUNT; j++) {
           if (CATHODE_ORDER[j] == figures[i]) {
             startingCathodes[i] = j;
           }
+
           if (CATHODE_ORDER[j] == nextFigures[i]) {
             endingCathodes[i] = j;
           }
@@ -423,7 +499,7 @@ void updateClockEffectCathodeRewind() {
 
   if (isClockEffectUpdateRequired()) {
     byte unchangedFigureCounter = 0;
-    for (byte i = 0; i < 4; i++) {
+    for (byte i = 0; i < INDICATOR_COUNT; i++) {
       if (changedFigures[i]) {
         if (startingCathodes[i] > endingCathodes[i]) {
           startingCathodes[i]--;
@@ -439,7 +515,7 @@ void updateClockEffectCathodeRewind() {
       }
     }
 
-    if (unchangedFigureCounter == 4) {
+    if (unchangedFigureCounter == INDICATOR_COUNT) {
       clockEffectInitialized = false;
       clockUpdateRequired = false;
     }
@@ -457,11 +533,12 @@ void updateClockEffectTrain() {
 
   if (isClockEffectUpdateRequired()) {
     if (trainLeaving) {
-      for (byte i = 3; i > trainCounter; i--) {
+      for (byte i = LAST_INDICATOR_INDEX; i > trainCounter; i--) {
         figures[i] = figures[i - 1];
       }
+
       indicatorStates[trainCounter++] = LOW;
-      if (trainCounter == 4) {
+      if (trainCounter == INDICATOR_COUNT) {
         trainLeaving = false;
         trainCounter = 0;
       }
@@ -469,10 +546,11 @@ void updateClockEffectTrain() {
       for (byte i = trainCounter; i > 0; i--) {
         figures[i] = figures[i - 1];
       }
-      figures[0] = nextFigures[3 - trainCounter];
+      figures[0] = nextFigures[LAST_INDICATOR_INDEX - trainCounter];
       indicatorStates[trainCounter] = HIGH;
       trainCounter++;
-      if (trainCounter == 4) {
+
+      if (trainCounter == INDICATOR_COUNT) {
         clockEffectInitialized = false;
         clockUpdateRequired = false;
       }
@@ -606,7 +684,7 @@ void updateDot() {
         }
       }
     }
-    digitalWrite(DOT_PIN, getCrtPwm(dotBrightnessCounter));
+    analogWrite(DOT_PIN, getCrtPwm(dotBrightnessCounter));
   }
 }
 
@@ -638,35 +716,39 @@ void updateBacklight() {
 
       analogWrite(BACKLIGHT_PIN, getCrtPwm(backlightBrightnessCounter));
     } else {
-      digitalWrite(BACKLIGHT_PIN, 0);
+      digitalWrite(BACKLIGHT_PIN, LOW);
     }
   }
 }
 
 void updateGlitches() {
 #if GLITCHES_ALLOWED
-  if (clockState == CLOCK_STATE_NORMAL && glitchesEnabled && isGlitchesUpdateRequired()) {
-    if (!glitching) {
-      if (seconds > 5 && seconds < 55) {
-        glitching = true;
-        glitchingIndicatorEnabled = false;
-        glitchCounter = 0;
-        glitchCounterThreshold = random(2, 6);
-        glitchingIndicatorIndex = random(0, 4);
-        glitchTimerInterval = random(1, 6) * 20;
-      }
-    } else {
-      if (++glitchCounter > glitchCounterThreshold) {
-        glitching = false;
-        indicatorDimmingThresholds[glitchingIndicatorIndex] = indicatorMaxBrightness;
-        glitchTimerInterval = random(GLITCH_MIN_INTERVAL_MILLIS, GLITCH_MAX_INTERVAL_MILLIS);
-      } else {
-        indicatorDimmingThresholds[glitchingIndicatorIndex] = glitchingIndicatorEnabled ? indicatorMaxBrightness : 0;
-        glitchingIndicatorEnabled = !glitchingIndicatorEnabled;
-        glitchTimerInterval = random(1, 6) * 20;
-      }
-    }
+  if (clockState != CLOCK_STATE_NORMAL || !glitchesEnabled || !isGlitchesUpdateRequired()) {
+    return;
   }
+
+  if (!glitching) {
+    if (seconds > GLITCH_MIN_SECOND && seconds < GLITCH_MAX_SECOND) {
+      glitching = true;
+      glitchingIndicatorEnabled = false;
+      glitchCounter = 0;
+      glitchCounterThreshold = random(GLITCH_MIN_BLINK_COUNT, GLITCH_MAX_BLINK_COUNT_EXCLUSIVE);
+      glitchingIndicatorIndex = random(0, INDICATOR_COUNT);
+      glitchTimerInterval = random(GLITCH_MIN_INTERVAL_STEP, GLITCH_MAX_INTERVAL_STEP_EXCLUSIVE) * GLITCH_INTERVAL_STEP_MILLIS;
+    }
+    return;
+  }
+
+  if (++glitchCounter > glitchCounterThreshold) {
+    glitching = false;
+    indicatorDimmingThresholds[glitchingIndicatorIndex] = indicatorMaxBrightness;
+    glitchTimerInterval = random(GLITCH_MIN_INTERVAL_MILLIS, GLITCH_MAX_INTERVAL_MILLIS);
+    return;
+  }
+
+  indicatorDimmingThresholds[glitchingIndicatorIndex] = glitchingIndicatorEnabled ? indicatorMaxBrightness : 0;
+  glitchingIndicatorEnabled = !glitchingIndicatorEnabled;
+  glitchTimerInterval = random(GLITCH_MIN_INTERVAL_STEP, GLITCH_MAX_INTERVAL_STEP_EXCLUSIVE) * GLITCH_INTERVAL_STEP_MILLIS;
 #endif
 }
 
@@ -677,126 +759,177 @@ void updateButtons() {
 
   if (isButtonHeld(BUTTON_SET_PIN)) {
     if (nextClockState == CLOCK_STATE_SETUP) {
-      if (clockState != CLOCK_STATE_SETUP) {
-        clockState = CLOCK_STATE_SETUP;
-        adjustingHours = true;
-        userHours = hours;
-        userMinutes = minutes;
-      }
-    } else if (clockState != CLOCK_STATE_NORMAL) {
-      hours = userHours;
-      minutes = userMinutes;
-      seconds = 0;
-
-      DateTime now = rtc.now();
-      rtc.adjust(DateTime(now.year(), now.month(), now.day(), hours, minutes, 0));
-
-      for (byte i = 0; i < 4; i++) {
-        indicatorStates[i] = HIGH;
-      }
-      changeBrightness();
-      clockState = CLOCK_STATE_NORMAL;
-    }
-  } else if (isButtonReleased(BUTTON_SET_PIN)) {
-    if (clockState == CLOCK_STATE_SETUP) {
-      nextClockState = CLOCK_STATE_NORMAL;
-
-      if (isButtonClicked(BUTTON_SET_PIN)) {
-        adjustingHours = !adjustingHours;
-      }
-    
-      if (isButtonClicked(BUTTON_RIGHT_PIN)) {
-        if (adjustingHours) {
-          userHours++;
-          if (userHours > 23) {
-            userHours = 0;
-          }
-        } else {
-          userMinutes++;
-          if (userMinutes > 59) {
-            userMinutes = 0;
-            userHours++;
-            if (userHours > 23) {
-              userHours = 0;
-            }
-          }
-        }
-      }
-
-      if (isButtonClicked(BUTTON_LEFT_PIN)) {
-        if (adjustingHours) {
-          if (userHours == 0) {
-            userHours = 23;
-          } else {
-            userHours--;
-          }
-        } else {
-          if (userMinutes == 0) {
-            userMinutes = 59;
-
-            if (userHours == 0) {
-              userHours = 23;
-            } else {
-              userHours--;
-            }
-          } else {
-            userMinutes--;
-          }
-        }
-      }
+      enterSetupMode();
     } else {
-      nextClockState = CLOCK_STATE_SETUP;
+      leaveSetupMode();
+    }
+    return;
+  }
 
-      if (isButtonClicked(BUTTON_RIGHT_PIN)) {
-        if (++clockEffect == CLOCK_EFFECTS_NUMBER) {
-          clockEffect = 0;
-        }
-        EEPROM.put(EEPROM_KEY_CLOCK_EFFECT, clockEffect);
+  if (!isButtonReleased(BUTTON_SET_PIN)) {
+    return;
+  }
 
-        for (byte i = 0; i < 4; i++) {
-          indicatorStates[i] = HIGH;
-          indicatorDimmingThresholds[i] = indicatorMaxBrightness;
-        }
-        indicatorBrightnessRaising = false;
-        indicatorBrightnessCounter = indicatorMaxBrightness;
+  if (clockState == CLOCK_STATE_SETUP) {
+    updateSetupButtons();
+  } else {
+    updateNormalModeButtons();
+  }
+}
 
-        for (byte i = 0; i < 4; i++) {
-          figures[i] = clockEffect;
-        }
+void enterSetupMode() {
+  if (clockState == CLOCK_STATE_SETUP) {
+    return;
+  }
 
-        clockEffectInitialized = false;
-        clockUpdateRequired = true;
-      }
+  clockState = CLOCK_STATE_SETUP;
+  adjustingHours = true;
+  userHours = hours;
+  userMinutes = minutes;
+}
 
-      if (isButtonClicked(BUTTON_LEFT_PIN)) {
-        if (++backlightMode == 3) {
-          backlightMode = 0;
-        }
-        EEPROM.put(EEPROM_KEY_BACKLIGHT_MODE, backlightMode);
-        if (backlightMode == BACKLIGHT_MODE_MAX_BRIGHTNESS) {
-          analogWrite(BACKLIGHT_PIN, backlightMaxBrightness);
-        } else if (backlightMode == BACKLIGHT_MODE_OFF) {
-          digitalWrite(BACKLIGHT_PIN, LOW);
-        }
-      }
+void leaveSetupMode() {
+  if (clockState == CLOCK_STATE_NORMAL) {
+    return;
+  }
 
-      #if GLITCHES_ALLOWED
-      if (isButtonHeld(BUTTON_LEFT_PIN)) {
-        glitchesEnabled = !glitchesEnabled;
-        EEPROM.put(EEPROM_KEY_GLITCHES_ENABLED, glitchesEnabled);
-      }
-      #endif
+  hours = userHours;
+  minutes = userMinutes;
+  seconds = 0;
+
+  DateTime now = rtc.now();
+  rtc.adjust(DateTime(now.year(), now.month(), now.day(), hours, minutes, 0));
+
+  resetIndicators();
+  showTime(hours, minutes);
+  changeBrightness();
+  clockState = CLOCK_STATE_NORMAL;
+  clockUpdateRequired = false;
+}
+
+void updateSetupButtons() {
+  nextClockState = CLOCK_STATE_NORMAL;
+
+  if (isButtonClicked(BUTTON_SET_PIN)) {
+    adjustingHours = !adjustingHours;
+  }
+  if (isButtonClicked(BUTTON_RIGHT_PIN)) {
+    incrementSetupTime();
+  }
+  if (isButtonClicked(BUTTON_LEFT_PIN)) {
+    decrementSetupTime();
+  }
+}
+
+void updateNormalModeButtons() {
+  nextClockState = CLOCK_STATE_SETUP;
+
+  if (isButtonClicked(BUTTON_RIGHT_PIN)) {
+    switchClockEffect();
+  }
+  if (isButtonClicked(BUTTON_LEFT_PIN)) {
+    switchBacklightMode();
+  }
+
+  #if GLITCHES_ALLOWED
+  if (isButtonHeld(BUTTON_LEFT_PIN)) {
+    toggleGlitches();
+  }
+  #endif
+}
+
+void incrementSetupTime() {
+  if (adjustingHours) {
+    userHours++;
+    if (userHours >= HOURS_PER_DAY) {
+      userHours = 0;
+    }
+    return;
+  }
+
+  userMinutes++;
+  if (userMinutes >= MINUTES_PER_HOUR) {
+    userMinutes = 0;
+    userHours++;
+    if (userHours >= HOURS_PER_DAY) {
+      userHours = 0;
     }
   }
 }
 
+void decrementSetupTime() {
+  if (adjustingHours) {
+    if (userHours == 0) {
+      userHours = MAX_HOUR_VALUE;
+    } else {
+      userHours--;
+    }
+    return;
+  }
+
+  if (userMinutes == 0) {
+    userMinutes = MAX_MINUTE_VALUE;
+    if (userHours == 0) {
+      userHours = MAX_HOUR_VALUE;
+    } else {
+      userHours--;
+    }
+  } else {
+    userMinutes--;
+  }
+}
+
+void switchClockEffect() {
+  if (++clockEffect == CLOCK_EFFECTS_NUMBER) {
+    clockEffect = CLOCK_EFFECT_NONE;
+  }
+  EEPROM.put(EEPROM_KEY_CLOCK_EFFECT, clockEffect);
+
+  resetIndicators();
+  indicatorBrightnessRaising = false;
+  indicatorBrightnessCounter = indicatorMaxBrightness;
+
+  for (byte i = 0; i < INDICATOR_COUNT; i++) {
+    figures[i] = clockEffect;
+  }
+
+  clockEffectInitialized = false;
+  clockUpdateRequired = true;
+}
+
+void switchBacklightMode() {
+  if (++backlightMode == BACKLIGHT_MODES_NUMBER) {
+    backlightMode = BACKLIGHT_MODE_BREATHING;
+  }
+  EEPROM.put(EEPROM_KEY_BACKLIGHT_MODE, backlightMode);
+
+  if (backlightMode == BACKLIGHT_MODE_MAX_BRIGHTNESS) {
+    analogWrite(BACKLIGHT_PIN, backlightMaxBrightness);
+  } else if (backlightMode == BACKLIGHT_MODE_OFF) {
+    digitalWrite(BACKLIGHT_PIN, LOW);
+  }
+}
+
+void resetIndicators() {
+  for (byte i = 0; i < INDICATOR_COUNT; i++) {
+    indicatorStates[i] = HIGH;
+    indicatorDimmingThresholds[i] = indicatorMaxBrightness;
+  }
+}
+
+#if GLITCHES_ALLOWED
+void toggleGlitches() {
+  glitchesEnabled = !glitchesEnabled;
+  EEPROM.put(EEPROM_KEY_GLITCHES_ENABLED, glitchesEnabled);
+}
+#endif
+
 void updateButton(int button) {
   unsigned long now = millis();
-
   boolean state = !digitalRead(button);
   byte btnIndex = getButtonIndex(button);
 
-  if (state && (buttonStates[btnIndex] != BUTTON_STATE_PRESSED || buttonStates[btnIndex] != BUTTON_STATE_HELD)) {
+  if (state && buttonStates[btnIndex] == BUTTON_STATE_RELEASED) {
     if (!buttonDebounceStates[btnIndex]) {
       buttonDebounceStates[btnIndex] = true;
       buttonDebounceTimes[btnIndex] = now;
@@ -806,12 +939,12 @@ void updateButton(int button) {
     }
   }
 
-  if (!state && buttonStates[btnIndex] != BUTTON_STATE_RELEASED) {
-      buttonDebounceStates[btnIndex] = false;
-      if (buttonStates[btnIndex] == BUTTON_STATE_PRESSED) {
-        buttonClickCounters[btnIndex] = 1;
-      }
-      buttonStates[btnIndex] = BUTTON_STATE_RELEASED;
+  if (!state) {
+    buttonDebounceStates[btnIndex] = false;
+    if (buttonStates[btnIndex] == BUTTON_STATE_PRESSED) {
+      buttonClickCounters[btnIndex] = 1;
+    }
+    buttonStates[btnIndex] = BUTTON_STATE_RELEASED;
   }
 
   if (buttonStates[btnIndex] == BUTTON_STATE_PRESSED && now - buttonDebounceTimes[btnIndex] >= BUTTON_HOLD_TIMEOUT_MILLIS) {
@@ -822,6 +955,7 @@ void updateButton(int button) {
 void updateSetup() {
   if (clockState == CLOCK_STATE_SETUP && isSetupUpdateRequired()) {
     showTime(userHours, userMinutes);
+
     if (adjustingHours) {
       indicatorStates[0] = indicatorStates[1] = HIGH;
       indicatorStates[2] = indicatorStates[3] = LOW;
@@ -842,7 +976,12 @@ boolean isButtonClicked(int button) {
 }
 
 boolean isButtonHeld(int button) {
-  return buttonStates[getButtonIndex(button)] == BUTTON_STATE_HELD;
+  byte btnIndex = getButtonIndex(button);
+  if (buttonStates[btnIndex] == BUTTON_STATE_HELD) {
+    buttonStates[btnIndex] = BUTTON_STATE_HOLD_HANDLED;
+    return true;
+  }
+  return false;
 }
 
 boolean isButtonReleased(int button) {
@@ -854,7 +993,7 @@ byte getButtonIndex(int button) {
 }
 
 boolean isTimeUpdateRequired() {
-  return isTimerWentOff(clockTimer, 500);
+  return isTimerWentOff(clockTimer, HALF_SECOND_INTERVAL_MILLIS);
 }
 
 boolean isClockEffectUpdateRequired() {
@@ -876,28 +1015,25 @@ boolean isGlitchesUpdateRequired() {
 #endif
 
 boolean isSetupUpdateRequired() {
-  return isTimerWentOff(setupTimer, 100);
+  return isTimerWentOff(setupTimer, SETUP_TIMER_INTERVAL_MILLIS);
 }
 
 boolean isTimerWentOff(unsigned long &timer, unsigned long interval) {
   unsigned long now = millis();
 
   if (interval == 0) {
+
     timer = now;
     return true;
   }
-
-  boolean result = false;
-  if (now - timer >= interval) {
-    do {
-      timer += interval;
-      if (timer < interval) {
-        break;
-      }
-    } while (timer < now - interval);
-    result = true;
+  if (now - timer < interval) {
+    return false;
   }
-  return result;
+
+  do {
+    timer += interval;
+  } while (now - timer >= interval);
+  return true;
 }
 
 void showTime(byte hours, byte minutes) {
@@ -931,19 +1067,19 @@ void changeBrightness() {
   backlightMaxBrightness = BACKLIGHT_MAX_BRIGHTNESS;
 
 #if NIGHT_MODE_ENABLED
-  if ((hours >= NIGHT_STARTS_AT_HOUR && hours <= 23) || (hours >= 0 && hours < NIGHT_ENDS_AT_HOUR)) {
+  if (hours >= NIGHT_STARTS_AT_HOUR || hours < NIGHT_ENDS_AT_HOUR) {
     indicatorMaxBrightness = INDICATOR_BRIGHTNESS_AT_NIGHT;
     dotMaxBrightness = DOT_BRIGHTNESS_AT_NIGHT;
     backlightMaxBrightness = BACKLIGHT_MAX_BRIGHTNESS_AT_NIGHT;
   }
 #endif
 
-  for (byte i = 0; i < 4; i++) {
+  for (byte i = 0; i < INDICATOR_COUNT; i++) {
     indicatorDimmingThresholds[i] = indicatorMaxBrightness;
   }
   indicatorBrightnessCounter = indicatorMaxBrightness;
 
-  dotBrightnessStep = ceil((float) dotMaxBrightness * 2 / 500 * DOT_TIMER_INTERVAL_MILLIS);
+  dotBrightnessStep = ceil((float) dotMaxBrightness * 2 / HALF_SECOND_INTERVAL_MILLIS * DOT_TIMER_INTERVAL_MILLIS);
   if (dotBrightnessStep == 0) {
     dotBrightnessStep = 1;
   }
@@ -969,10 +1105,10 @@ byte getIndicatorDimmingThreshold(byte indicator) {
 
 void runAntiPoisoning() {
   for (byte i = 0; i < ANTI_POISONING_LOOPS_NUMBER; i++) {
-    for (byte j = 0; j < 10; j++) {
-      for (byte k = 0; k < 4; k++) {
+    for (byte j = 0; j < FIGURE_COUNT; j++) {
+      for (byte k = 0; k < INDICATOR_COUNT; k++) {
         if (figures[k] == 0) {
-          figures[k] = 9;
+          figures[k] = FIGURE_COUNT - 1;
         } else {
           figures[k]--;
         }
@@ -980,11 +1116,10 @@ void runAntiPoisoning() {
       delay(ANTI_POISONING_DELAY_MILLIS);
     }
   }
-
 }
 
-// Main function that shows figures on indicators using dynamic indication technic
-ISR(TIMER2_COMPA_vect) {
+// Обработчик динамической индикации газоразрядных индикаторов.
+ISR(TIMER2_OVF_vect) {
   byte dimmingThreshold = getIndicatorDimmingThreshold(currentIndicator);
   if (++indicatorBrightnessCounters[currentIndicator] >= dimmingThreshold) {
     digitalWrite(INDICATOR_PINS[currentIndicator], LOW);
@@ -992,7 +1127,7 @@ ISR(TIMER2_COMPA_vect) {
 
   if (indicatorBrightnessCounters[currentIndicator] >= INDICATOR_SWITCH_THRESHOLD) {
     indicatorBrightnessCounters[currentIndicator] = 0;
-    if (++currentIndicator > 3) {
+    if (++currentIndicator > LAST_INDICATOR_INDEX) {
       currentIndicator = 0;
     }
 
