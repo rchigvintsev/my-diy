@@ -688,7 +688,7 @@ void updateDot() {
         }
       }
     }
-    analogWrite(DOT_PIN, getCrtPwm(dotBrightnessCounter));
+    digitalWrite(DOT_PIN, dotBrightnessCounter);
   }
 }
 
