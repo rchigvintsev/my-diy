@@ -1,6 +1,5 @@
 /// \file ArduButton.cpp
-/// \brief Реализация тактовой кнопки с подавлением дребезга и распознаванием
-///        клика и удержания.
+/// \brief Реализация тактовой кнопки с подавлением дребезга и распознаванием клика и удержания.
 ///
 /// \author Roman Chigvintsev
 
@@ -35,16 +34,14 @@ void ArduButton::update(void) {
 
 	if (!state && _state != ARDU_BUTTON_STATE_RELEASED) {
 		_debounceState = false;
-		// Кнопка отпущена после короткого нажатия — засчитываем клик.
-		// Если был переход в HELD, клик не засчитывается.
+		// Кнопка отпущена после короткого нажатия — засчитываем клик. Если был переход в HELD, клик не засчитывается.
 		if (_state == ARDU_BUTTON_STATE_PRESSED) {
 			_clickCounter = 1;
 		}
 		_state = ARDU_BUTTON_STATE_RELEASED;
 	}
 
-	// Долгое удержание — переходим в HELD; клик уже не будет засчитан
-	// после отпускания.
+	// Долгое удержание — переходим в HELD; клик уже не будет засчитан после отпускания.
 	if (_state == ARDU_BUTTON_STATE_PRESSED && now - _debounceTime >= _holdTimeoutMillis) {
 		_state = ARDU_BUTTON_STATE_HELD;
 	}

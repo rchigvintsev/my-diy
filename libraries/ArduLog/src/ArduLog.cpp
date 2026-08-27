@@ -5,46 +5,48 @@
 
 #include "ArduLog.h"
 
-ArduLogger::ArduLogger(const String& name, ArduLogLevel effectiveLevel) {
+ArduLog::ArduLog(const String& name, ArduLogLevel effectiveLevel) {
 	_name = name;
 	_effectiveLevel = effectiveLevel;
 }
 
-void ArduLogger::trace(const String& message) {
+void ArduLog::trace(const String& message) {
 	if (!isOff() && _effectiveLevel == ArduLogLevel::TRACE) {
 		log(message, ArduLogLevel::TRACE);
 	}
 }
 
-void ArduLogger::debug(const String& message) {
+void ArduLog::debug(const String& message) {
 	if (!isOff() && (_effectiveLevel == ArduLogLevel::TRACE || _effectiveLevel == ArduLogLevel::DEBUG)) {
 		log(message, ArduLogLevel::DEBUG);
 	}
 }
 
-void ArduLogger::info(const String& message) {
-	if (!isOff() && (_effectiveLevel == ArduLogLevel::TRACE || _effectiveLevel == ArduLogLevel::DEBUG || _effectiveLevel == ArduLogLevel::INFO)) {
+void ArduLog::info(const String& message) {
+	if (!isOff() && (_effectiveLevel == ArduLogLevel::TRACE || _effectiveLevel == ArduLogLevel::DEBUG
+	    || _effectiveLevel == ArduLogLevel::INFO)) {
 		log(message, ArduLogLevel::INFO);
 	}
 }
 
-void ArduLogger::warn(const String& message) {
-	if (!isOff() && (_effectiveLevel == ArduLogLevel::TRACE || _effectiveLevel == ArduLogLevel::DEBUG || _effectiveLevel == ArduLogLevel::INFO || _effectiveLevel == ArduLogLevel::WARN)) {
+void ArduLog::warn(const String& message) {
+	if (!isOff() && (_effectiveLevel == ArduLogLevel::TRACE || _effectiveLevel == ArduLogLevel::DEBUG
+	    || _effectiveLevel == ArduLogLevel::INFO || _effectiveLevel == ArduLogLevel::WARN)) {
 		log(message, ArduLogLevel::WARN);
 	}
 }
 
-void ArduLogger::error(const String& message) {
+void ArduLog::error(const String& message) {
 	if (!isOff()) {
 		log(message, ArduLogLevel::ERROR);
 	}
 }
 
-boolean ArduLogger::isOff(void) {
+boolean ArduLog::isOff(void) {
 	return _effectiveLevel == ArduLogLevel::OFF;
 }
 
-void ArduLogger::log(const String& message, ArduLogLevel level) {
+void ArduLog::log(const String& message, ArduLogLevel level) {
 	String resultMessage = "";
 
 	// Разбиваем millis() на компоненты «часы:минуты:секунды.миллисекунды».

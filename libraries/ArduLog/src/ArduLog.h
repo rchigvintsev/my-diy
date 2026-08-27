@@ -2,8 +2,7 @@
 /// \brief Простой логгер для Arduino с уровнями TRACE / DEBUG / INFO / WARN / ERROR.
 ///
 /// Особенности:
-///  - вывод в Serial; ответственность за инициализацию Serial.begin() лежит
-///    на пользователе;
+///  - вывод в Serial; ответственность за инициализацию Serial.begin() лежит на пользователе;
 ///  - формат записи: «ЧЧ:ММ:СС.ммм УРОВЕНЬ ИМЯ - сообщение»;
 ///  - уровень логирования задаётся для каждого логгера в конструкторе;
 ///  - сообщения принимаются по const-ссылке для экономии RAM.
@@ -20,8 +19,8 @@
 
 /// \brief Уровни логирования.
 ///
-/// Порядок (от наиболее подробного к наименее подробному): TRACE, DEBUG, INFO,
-/// WARN, ERROR. Уровень OFF полностью отключает логирование.
+/// Порядок (от наиболее подробного к наименее подробному): TRACE, DEBUG, INFO, WARN, ERROR. Уровень OFF полностью
+/// отключает логирование.
 enum class ArduLogLevel {
 	TRACE,
 	DEBUG,
@@ -32,7 +31,7 @@ enum class ArduLogLevel {
 };
 
 /// \brief Логгер с именем и настраиваемым эффективным уровнем.
-class ArduLogger {
+class ArduLog {
 private:
 	String _name;
 	ArduLogLevel _effectiveLevel;
@@ -48,7 +47,7 @@ public:
 	/// \brief Конструктор.
 	/// \param name           Имя логгера, попадает в каждое сообщение.
 	/// \param effectiveLevel Эффективный уровень логирования (по умолчанию DEBUG).
-	ArduLogger(const String& name, ArduLogLevel effectiveLevel = ArduLogLevel::DEBUG);
+	ArduLog(const String& name, ArduLogLevel effectiveLevel = ArduLogLevel::DEBUG);
 
 	/// \brief Логирует сообщение уровня TRACE.
 	/// \param message Текст сообщения.

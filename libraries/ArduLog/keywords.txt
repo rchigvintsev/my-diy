@@ -7,7 +7,7 @@
 #######################################
 
 ArduLogLevel KEYWORD1
-ArduLogger   KEYWORD1
+ArduLog      KEYWORD1
 
 #######################################
 # Methods and Functions (KEYWORD2)

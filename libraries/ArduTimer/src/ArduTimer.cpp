@@ -20,8 +20,8 @@ boolean ArduTimer::isWentOff(void) {
 
 	boolean result = false;
 	if (now - _time >= _intervalMillis) {
-		// Цикл «догоняет» пропущенные срабатывания, сохраняя ритм без накопления
-		// ошибки. Защита от переполнения: если _time переполнился, прерываем цикл.
+		// Цикл «догоняет» пропущенные срабатывания, сохраняя ритм без накопления ошибки. Защита от переполнения: если
+		// _time переполнился, прерываем цикл.
 		do {
 			_time += _intervalMillis;
 			if (_time < _intervalMillis) {
@@ -37,8 +37,7 @@ unsigned long ArduTimer::getRemainingTimeMillis(void) {
 	if (_intervalMillis == 0) {
 		return 0;
 	}
-	// Арифметика unsigned long корректно обрабатывает переполнение millis()
-	// через wrap-around.
+	// Арифметика unsigned long корректно обрабатывает переполнение millis() через wrap-around.
 	unsigned long delta = millis() - _time;
 	return delta > _intervalMillis ? 0 : _intervalMillis - delta;
 }

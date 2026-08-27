@@ -148,7 +148,7 @@ void loop() {
 ```cpp
 #include <ArduLog.h>
 
-ArduLogger logger("Main", ArduLogLevel::INFO);
+ArduLog logger("Main", ArduLogLevel::INFO);
 
 void setup() {
   Serial.begin(9600);

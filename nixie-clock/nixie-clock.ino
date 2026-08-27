@@ -1,7 +1,6 @@
 /// Прошивка часов на газоразрядных индикаторах.
 ///
-/// Основано на коде из репозитория Alex Gyver:
-/// https://github.com/AlexGyver/NixieClock_v2.
+/// Основано на коде из репозитория Alex Gyver: https://github.com/AlexGyver/NixieClock_v2.
 
 #include <Wire.h>
 #include <RTClib.h>
@@ -36,8 +35,7 @@ const byte TIMER2_PWM_PRESCALER_8 = 0b00000010;
 #define INDICATOR_SWITCH_THRESHOLD 25
 #define TIME_SYNC_TIMEOUT_MINUTES 15
 
-// Коррекция RTC по умолчанию отключена.
-// Положительное значение RTC_CORRECTION_SECONDS ускоряет отстающий модуль DS3231.
+// Коррекция RTC по умолчанию отключена. Положительное значение RTC_CORRECTION_SECONDS ускоряет отстающий модуль DS3231.
 #define RTC_CORRECTION_ENABLED false
 // Производим коррекцию раз в сутки
 #define RTC_CORRECTION_INTERVAL_MINUTES 1440UL
@@ -127,7 +125,10 @@ const byte GLITCH_INTERVAL_STEP_MILLIS = 20;
 
 const byte INDICATOR_PINS[INDICATOR_COUNT] = {INDICATOR1_PIN, INDICATOR2_PIN, INDICATOR3_PIN, INDICATOR4_PIN};
 const byte DECODER_PINS[DECODER_PIN_COUNT] = {DECODER0_PIN, DECODER1_PIN, DECODER2_PIN, DECODER3_PIN};
-const byte FIGURE_MASKS[FIGURE_COUNT] = {0b00001001, 0b00001000, 0b00000000, 0b00000101, 0b00000100, 0b00000111, 0b00000011, 0b00000110, 0b00000010, 0b00000001};
+const byte FIGURE_MASKS[FIGURE_COUNT] = {
+    0b00001001, 0b00001000, 0b00000000, 0b00000101, 0b00000100,
+    0b00000111, 0b00000011, 0b00000110, 0b00000010, 0b00000001
+};
 const byte CATHODE_ORDER[FIGURE_COUNT] = {1, 0, 2, 9, 3, 8, 4, 7, 5, 6};
 
 volatile byte indicatorMaxBrightness;
@@ -698,7 +699,8 @@ void updateBacklight() {
       if (backlightBrightnessRaising) {
         if (!backlightTurnedOn) {
           backlightTurnedOn = true;
-          backlightTimerInterval = (float) BACKLIGHT_BRIGHTNESS_STEP / backlightMaxBrightness / 2 * BACKLIGHT_TIME_MILLIS;
+          backlightTimerInterval = (float) BACKLIGHT_BRIGHTNESS_STEP / backlightMaxBrightness / 2
+            * BACKLIGHT_TIME_MILLIS;
         }
 
         backlightBrightnessCounter += BACKLIGHT_BRIGHTNESS_STEP;
@@ -738,7 +740,8 @@ void updateGlitches() {
       glitchCounter = 0;
       glitchCounterThreshold = random(GLITCH_MIN_BLINK_COUNT, GLITCH_MAX_BLINK_COUNT_EXCLUSIVE);
       glitchingIndicatorIndex = random(0, INDICATOR_COUNT);
-      glitchTimerInterval = random(GLITCH_MIN_INTERVAL_STEP, GLITCH_MAX_INTERVAL_STEP_EXCLUSIVE) * GLITCH_INTERVAL_STEP_MILLIS;
+      glitchTimerInterval = random(GLITCH_MIN_INTERVAL_STEP, GLITCH_MAX_INTERVAL_STEP_EXCLUSIVE)
+        * GLITCH_INTERVAL_STEP_MILLIS;
     }
     return;
   }
@@ -752,7 +755,8 @@ void updateGlitches() {
 
   indicatorDimmingThresholds[glitchingIndicatorIndex] = glitchingIndicatorEnabled ? indicatorMaxBrightness : 0;
   glitchingIndicatorEnabled = !glitchingIndicatorEnabled;
-  glitchTimerInterval = random(GLITCH_MIN_INTERVAL_STEP, GLITCH_MAX_INTERVAL_STEP_EXCLUSIVE) * GLITCH_INTERVAL_STEP_MILLIS;
+  glitchTimerInterval = random(GLITCH_MIN_INTERVAL_STEP, GLITCH_MAX_INTERVAL_STEP_EXCLUSIVE)
+    * GLITCH_INTERVAL_STEP_MILLIS;
 #endif
 }
 
@@ -953,7 +957,8 @@ void updateButton(int button) {
     buttonStates[btnIndex] = BUTTON_STATE_RELEASED;
   }
 
-  if (buttonStates[btnIndex] == BUTTON_STATE_PRESSED && now - buttonDebounceTimes[btnIndex] >= BUTTON_HOLD_TIMEOUT_MILLIS) {
+  if (buttonStates[btnIndex] == BUTTON_STATE_PRESSED
+      && now - buttonDebounceTimes[btnIndex] >= BUTTON_HOLD_TIMEOUT_MILLIS) {
     buttonStates[btnIndex] = BUTTON_STATE_HELD;
   }
 }

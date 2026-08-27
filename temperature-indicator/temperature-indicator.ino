@@ -28,9 +28,9 @@ const int PIN_TMP = A0;
 const byte ADC_SAMPLES = 16;
 
 // Низкая температура, которой соответствует синий цвет светодиода.
-const int TMP_LOW = 25;
+const int TMP_LOW    = 25;
 // Высокая температура, которой соответствует красный цвет светодиода.
-const int TMP_HI  = 30;
+const int TMP_HI     = 30;
 // Коррекция показаний датчика.
 const float TMP_CORR = -1.7;
 
@@ -64,13 +64,13 @@ float readVoltage() {
     sum += analogRead(PIN_TMP);
   }
   float avg = static_cast<float>(sum) / ADC_SAMPLES;
-  
+
   // Преобразуем результат в напряжение.
   return avg * 5.0 / 1023.0f;
 }
 
 float voltageToTemperature(float voltage) {
-  // Преобразуем считанное напряжение в температуру в °C, дополнительно применяя коррекцию показаний датчика. Датчик 
+  // Преобразуем считанное напряжение в температуру в °C, дополнительно применяя коррекцию показаний датчика. Датчик
   // TMP36GSZ выдаёт 10 мВ на каждый °C, при этом при 0°C на выходе будет примерно 500 мВ.
   return (voltage - 0.5) * 100.0 + TMP_CORR;
 }
