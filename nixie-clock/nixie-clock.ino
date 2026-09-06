@@ -41,10 +41,10 @@ const byte TIMER2_PWM_PRESCALER_8 = 0b00000010;
 #define RTC_CORRECTION_INTERVAL_MINUTES 1440UL
 #define RTC_CORRECTION_SECONDS 0L
 
-#define NIGHT_MODE_ENABLED   true
+#define NIGHT_MODE_ENABLED true
 
-#define NIGHT_STARTS_AT_HOUR   22
-#define NIGHT_ENDS_AT_HOUR      8
+#define NIGHT_STARTS_AT_HOUR 22
+#define NIGHT_ENDS_AT_HOUR    8
 
 #define INDICATOR_BRIGHTNESS          23
 #define INDICATOR_BRIGHTNESS_AT_NIGHT  3
@@ -689,7 +689,7 @@ void updateDot() {
         }
       }
     }
-    digitalWrite(DOT_PIN, dotBrightnessCounter);
+    analogWrite(DOT_PIN, dotBrightnessCounter);
   }
 }
 
@@ -1121,9 +1121,17 @@ DateTime shiftDateTime(DateTime dateTime, long secondsToAdd) {
 
 void syncTime() {
   DateTime now = rtc.now();
+
+  byte previousHours = hours;
+
   hours = now.hour();
   minutes = now.minute();
   seconds = now.second();
+
+  if (hours != previousHours) {
+    changeBrightness();
+  }
+
   resetTimeSyncTimer();
 }
 
